@@ -1,116 +1,156 @@
 <!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>Fixed Frame Photo Capture</title>
-  <style>
-    body {
-      background-color: #f0f0f0;
-      font-family: Arial, sans-serif;
-      text-align: center;
-      margin: 0;
-      padding: 20px;
-    }
-    #camera-container {
-      position: relative;
-      width: 720px;
-      height: 1280px;
-      margin: 0 auto;
-      background: #000;
-    }
-    /* Video fills the container */
-    #video {
-      width: 720px;
-      height: 1280px;
-      object-fit: cover;
-    }
-    /* Overlay canvas for drawing fixed frame */
-    #overlay {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 720px;
-      height: 1280px;
-      pointer-events: none; /* Allow clicks to pass through to video */
-    }
-    #capture-btn {
-      margin-top: 20px;
-      padding: 10px 20px;
-      font-size: 1.2em;
-    }
-  </style>
-</head>
-<body>
-  <h1>Fixed Frame Photo Capture</h1>
-  <p>Please position yourself so that you are fully within the fixed frame.</p>
-  <div id="camera-container">
-    <video id="video" autoplay playsinline></video>
-    <canvas id="overlay"></canvas>
-  </div>
-  <button id="capture-btn">Capture Photo</button>
-  
-  <script>
-    // Get references to the video element and the overlay canvas.
-    const video = document.getElementById('video');
-    const overlay = document.getElementById('overlay');
-    const ctx = overlay.getContext('2d');
-    const captureBtn = document.getElementById('capture-btn');
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Fixed Frame Photo Capture</title>
+    <style>
+      body {
+        background-color: #f0f0f0;
+        font-family: Arial, sans-serif;
+        text-align: center;
+        margin: 0;
+        padding: 20px;
+      }
+      #camera-container {
+        position: relative;
+        width: 720px; 
+        height: 1280px;
+        margin: 0 auto;
+        background: #000;
+      }
+      #video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      #overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 720px;
+        height: 1280px;
+        pointer-events: none;
+      }
+      #capture-btn {
+        margin-top: 20px;
+        padding: 10px 20px;
+        font-size: 1.2em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Fixed Frame Photo Capture</h1>
+    <p>Ensure you are entirely within the fixed frame!</p>
+    <div id="camera-container">
+      <video id="video" autoplay playsinline></video>
+      <canvas id="overlay"></canvas>
+    </div>
+    <button id="capture-btn">Capture Photo</button>
 
-    // Define the fixed frame (in pixels) within our container.
-    // You can adjust these numbers as needed.
-    const fixedFrame = { minX: 50, minY: 50, maxX: 670, maxY: 1230 };
+    <!-- Load MediaPipe FaceMesh and Camera Utils from CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
-    // Function to draw the fixed frame overlay.
-    function drawOverlay(isValid) {
-      ctx.clearRect(0, 0, overlay.width, overlay.height);
-      ctx.lineWidth = 5;
-      ctx.strokeStyle = isValid ? 'green' : 'red';
-      ctx.strokeRect(fixedFrame.minX, fixedFrame.minY, fixedFrame.maxX - fixedFrame.minX, fixedFrame.maxY - fixedFrame.minY);
-    }
+    <script>
+      // Get HTML elements
+      const videoElement = document.getElementById('video');
+      const overlayCanvas = document.getElementById('overlay');
+      const overlayCtx = overlayCanvas.getContext('2d');
+      const captureBtn = document.getElementById('capture-btn');
 
-    // Dummy validation function. For a demo you might simply return true.
-    // You can enhance this later with computer vision checks, etc.
-    function isFrameValid() {
-      // Here you might analyze the video feed (or some landmarks) to check that the person is inside the region.
-      // For now, we simply always return true.
-      return true;
-    }
+      // When the video metadata is loaded, update canvas dimensions to match the actual feed.
+      videoElement.addEventListener('loadedmetadata', () => {
+        overlayCanvas.width = videoElement.videoWidth;
+        overlayCanvas.height = videoElement.videoHeight;
+        // Define a frame region as fractions of width and height.
+        fixedFrame.minX = 0.1 * videoElement.videoWidth;
+        fixedFrame.minY = 0.1 * videoElement.videoHeight;
+        fixedFrame.maxX = 0.9 * videoElement.videoWidth;
+        fixedFrame.maxY = 0.9 * videoElement.videoHeight;
+      });
 
-    // Access the camera.
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({ video: { width: 720, height: 1280 } })
-        .then(stream => {
-          video.srcObject = stream;
-          video.play();
-        })
-        .catch(err => {
-          console.error("Error accessing camera: ", err);
-          alert("Unable to access the camera. Make sure your browser supports camera access.");
-        });
-    } else {
-      alert("Camera access is not supported by your browser.");
-    }
+      // Define our fixed frame region (will be updated after video metadata loads).
+      let fixedFrame = {
+        minX: 50,
+        minY: 50,
+        maxX: 670,
+        maxY: 1230,
+      };
 
-    // Draw the overlay at regular intervals.
-    setInterval(() => {
-      drawOverlay(isFrameValid());
-    }, 100);
+      // We'll use MediaPipe FaceMesh to detect the user's nose position.
+      // (For a simple validation, we use the nose landmark.)
+      const faceMesh = new FaceMesh({
+        locateFile: (file) => {
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+        }
+      });
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      });
+      faceMesh.onResults(onResults);
 
-    // Capture the image when the user clicks the Capture button.
-    captureBtn.addEventListener('click', () => {
-      // Create an offscreen canvas to capture the still image.
-      const captureCanvas = document.createElement('canvas');
-      captureCanvas.width = 720;
-      captureCanvas.height = 1280;
-      const captureCtx = captureCanvas.getContext('2d');
-      captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
-      
-      // For testing, open the captured image in a new tab.
-      const dataURL = captureCanvas.toDataURL('image/png');
-      window.open(dataURL, '_blank');
-      
-      // You could also send the dataURL to your backend via an AJAX request for further processing.
-    });
-  </script>
-</body>
+      // onResults callback receives the detected landmarks.
+      let currentNose = null; // will hold the nose coordinates in pixel space.
+      function onResults(results) {
+        // Clear overlay canvas.
+        overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+        // Draw the fixed frame—color depends on validation.
+        let valid = false;
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+          // Use the first face's landmark
+          const landmarks = results.multiFaceLandmarks[0];
+          // In MediaPipe FaceMesh, landmark index 1 is typically near the nose tip.
+          const noseLandmark = landmarks[1];
+          // Convert normalized coordinates (0 to 1) into pixel space:
+          currentNose = {
+            x: noseLandmark.x * overlayCanvas.width,
+            y: noseLandmark.y * overlayCanvas.height
+          };
+          valid = isFrameValid(currentNose, fixedFrame);
+        }
+        drawOverlay(valid);
+      }
+
+      // Draw the overlay rectangle: green if valid, red if invalid.
+      function drawOverlay(isValid) {
+        overlayCtx.lineWidth = 5;
+        overlayCtx.strokeStyle = isValid ? 'green' : 'red';
+        overlayCtx.strokeRect(fixedFrame.minX, fixedFrame.minY,
+          fixedFrame.maxX - fixedFrame.minX, fixedFrame.maxY - fixedFrame.minY);
+      }
+
+      // Basic validation: check if the nose is inside the fixedFrame.
+      function isFrameValid(nose, frame) {
+        return (nose.x >= frame.minX && nose.x <= frame.maxX &&
+                nose.y >= frame.minY && nose.y <= frame.maxY);
+      }
+
+      // Set up the camera using MediaPipe's Camera utility.
+      const camera = new Camera(videoElement, {
+        onFrame: async () => {
+          await faceMesh.send({ image: videoElement });
+        },
+        width: 720,
+        height: 1280
+      });
+      camera.start();
+
+      // When the "Capture Photo" button is clicked, capture the current frame.
+      captureBtn.addEventListener('click', () => {
+        // Create an offscreen canvas to capture the video frame.
+        const captureCanvas = document.createElement('canvas');
+        captureCanvas.width = videoElement.videoWidth;
+        captureCanvas.height = videoElement.videoHeight;
+        const captureCtx = captureCanvas.getContext('2d');
+        captureCtx.drawImage(videoElement, 0, 0, captureCanvas.width, captureCanvas.height);
+        // Open the captured image in a new tab (for testing).
+        const dataURL = captureCanvas.toDataURL('image/png');
+        window.open(dataURL, '_blank');
+      });
+    </script>
+  </body>
 </html>
