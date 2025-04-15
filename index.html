@@ -29,7 +29,7 @@
         left: 0;
         width: 720px;
         height: 1280px;
-        pointer-events: none;
+        pointer-events: none; /* Allow clicks through */
       }
       .btn-container {
         margin-top: 20px;
@@ -43,7 +43,7 @@
   </head>
   <body>
     <h1>Fixed Frame Capture</h1>
-    <p>Ensure you are fully within the fixed frame.</p>
+    <p>Stand fully inside the fixed frame. The border will be green if you’re in frame, red if not.</p>
     <div id="camera-container">
       <video id="video" autoplay playsinline></video>
       <canvas id="overlay"></canvas>
@@ -52,74 +52,54 @@
       <button id="capture-photo-btn">Capture Photo</button>
       <button id="record-video-btn">Record 10-sec Video</button>
     </div>
-
-    <!-- MediaPipe FaceMesh for landmark detection (for overlay validation) -->
+    
+    <!-- MediaPipe FaceMesh and Camera Utils -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-
+    
     <script>
       const videoElement = document.getElementById('video');
       const overlay = document.getElementById('overlay');
       const ctx = overlay.getContext('2d');
       const capturePhotoBtn = document.getElementById('capture-photo-btn');
       const recordVideoBtn = document.getElementById('record-video-btn');
-      
-      // Define fixed frame as fractions (we update later based on real video dimensions)
-      let fixedFrame = {
-        minX: 0.1, // 10% in
-        minY: 0.1,
-        maxX: 0.9,
-        maxY: 0.9
-      };
 
-      // Once the video metadata loads, update the overlay size and compute fixed frame in pixel units.
+      // Set up a fixed frame as a fraction of video dimensions. These are updated on loadedmetadata.
+      let fixedFrameFraction = {
+        minX: 0.1,  // 10% in from left
+        minY: 0.1,  // 10% in from top
+        maxX: 0.9,  // 90% (i.e., 10% margin on right)
+        maxY: 0.9   // 90% (i.e., 10% margin on bottom)
+      };
+      let fixedFramePixels = null; // Will hold pixel coordinates after video loads.
+
+      // Set up video and overlay dimensions based on actual video resolution.
       videoElement.addEventListener('loadedmetadata', () => {
+        // Set canvas size to match video.
         overlay.width = videoElement.videoWidth;
         overlay.height = videoElement.videoHeight;
-        
-        // Convert fixedFrame from fractions to pixels.
-        fixedFrame.pixel = {
-          minX: fixedFrame.minX * videoElement.videoWidth,
-          minY: fixedFrame.minY * videoElement.videoHeight,
-          maxX: fixedFrame.maxX * videoElement.videoWidth,
-          maxY: fixedFrame.maxY * videoElement.videoHeight
+        // Update fixedFramePixels.
+        fixedFramePixels = {
+          minX: fixedFrameFraction.minX * videoElement.videoWidth,
+          minY: fixedFrameFraction.minY * videoElement.videoHeight,
+          maxX: fixedFrameFraction.maxX * videoElement.videoWidth,
+          maxY: fixedFrameFraction.maxY * videoElement.videoHeight
         };
       });
 
-      // Function to draw the fixed frame. If isValid is true, draw in green; otherwise red.
+      // Draw the fixed frame overlay.
       function drawOverlay(isValid) {
         ctx.clearRect(0, 0, overlay.width, overlay.height);
         ctx.lineWidth = 5;
         ctx.strokeStyle = isValid ? 'green' : 'red';
-        const f = fixedFrame.pixel;
-        ctx.strokeRect(f.minX, f.minY, f.maxX - f.minX, f.maxY - f.minY);
-      }
-
-      // Dummy function to get face landmark position (using MediaPipe FaceMesh later).
-      let currentNose = null;
-      function onResults(results) {
-        overlay.getContext('2d').clearRect(0, 0, overlay.width, overlay.height);
-        // Draw the fixed frame depending on validation.
-        let valid = false;
-        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-          const landmarks = results.multiFaceLandmarks[0];
-          const noseLandmark = landmarks[1]; // Nose tip index usually
-          currentNose = {
-            x: noseLandmark.x * overlay.width,
-            y: noseLandmark.y * overlay.height
-          };
-          valid = isFrameValid(currentNose, fixedFrame.pixel);
+        if (fixedFramePixels) {
+          ctx.strokeRect(fixedFramePixels.minX, fixedFramePixels.minY,
+            fixedFramePixels.maxX - fixedFramePixels.minX,
+            fixedFramePixels.maxY - fixedFramePixels.minY);
         }
-        drawOverlay(valid);
       }
 
-      // Check if key point is within the fixed frame.
-      function isFrameValid(nose, frame) {
-        return (nose.x >= frame.minX && nose.x <= frame.maxX &&
-                nose.y >= frame.minY && nose.y <= frame.maxY);
-      }
-
-      // Set up MediaPipe FaceMesh for overlay validation.
+      // We'll use MediaPipe FaceMesh to track a key landmark (e.g., nose tip) for frame validation.
       const faceMesh = new FaceMesh({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
       });
@@ -131,7 +111,28 @@
       });
       faceMesh.onResults(onResults);
 
-      // Set up Camera using MediaPipe's Camera utility.
+      let currentNose = null; // Will hold nose coordinates in pixel space.
+      function onResults(results) {
+        // Clear overlay
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+        // If landmarks are detected, get the nose position.
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+          const landmarks = results.multiFaceLandmarks[0];
+          const noseLandmark = landmarks[1]; // For many models, index 1 is close to nose tip.
+          currentNose = {
+            x: noseLandmark.x * overlay.width,
+            y: noseLandmark.y * overlay.height
+          };
+        }
+        // Validate frame based on whether the nose is inside the fixed frame.
+        let valid = currentNose && fixedFramePixels &&
+          (currentNose.x >= fixedFramePixels.minX && currentNose.x <= fixedFramePixels.maxX &&
+           currentNose.y >= fixedFramePixels.minY && currentNose.y <= fixedFramePixels.maxY);
+        drawOverlay(valid);
+      }
+
+      // Set up the camera using MediaPipe's Camera utility.
       const camera = new Camera(videoElement, {
         onFrame: async () => {
           await faceMesh.send({ image: videoElement });
@@ -141,63 +142,70 @@
       });
       camera.start();
 
-      // --------------------------
-      // PHOTO CAPTURE
-      // --------------------------
+      // ---------------------------
+      // Capture Photo Functionality (Download)
+      // ---------------------------
       capturePhotoBtn.addEventListener('click', () => {
         const captureCanvas = document.createElement('canvas');
         captureCanvas.width = videoElement.videoWidth;
         captureCanvas.height = videoElement.videoHeight;
         const captureCtx = captureCanvas.getContext('2d');
         captureCtx.drawImage(videoElement, 0, 0, captureCanvas.width, captureCanvas.height);
-        const dataURL = captureCanvas.toDataURL('image/png');
-        window.open(dataURL, '_blank');
+        // Create a download link.
+        captureCanvas.toBlob((blob) => {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'captured_photo.png';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 'image/png');
       });
 
-      // --------------------------
-      // VIDEO CAPTURE (MAX 10 sec)
-      // --------------------------
+      // ---------------------------
+      // Video Capture Functionality (Download) - Maximum 10 seconds
+      // ---------------------------
       let mediaRecorder;
       let recordedChunks = [];
       recordVideoBtn.addEventListener('click', () => {
-        // Check if MediaRecorder API is supported.
         if (!navigator.mediaDevices || !window.MediaRecorder) {
           alert("MediaRecorder is not supported on your browser.");
           return;
         }
         recordedChunks = [];
         const stream = videoElement.srcObject;
-
         try {
           mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
         } catch (e) {
           console.error("Error creating MediaRecorder:", e);
-          alert("MediaRecorder error. Your browser may not support this format.");
+          alert("MediaRecorder error: " + e);
           return;
         }
-
         mediaRecorder.ondataavailable = (event) => {
           if (event.data && event.data.size > 0) {
             recordedChunks.push(event.data);
           }
         };
-
         mediaRecorder.onstop = () => {
-          // Combine the recorded chunks into a Blob.
           const blob = new Blob(recordedChunks, { type: 'video/webm' });
           const url = URL.createObjectURL(blob);
-          // Open the recorded video in a new tab for testing.
-          window.open(url, '_blank');
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'captured_video.webm';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
         };
-
         mediaRecorder.start();
-
-        // Stop the recording automatically after 10 seconds.
+        // Automatically stop recording after 10 seconds.
         setTimeout(() => {
           if (mediaRecorder && mediaRecorder.state !== 'inactive') {
             mediaRecorder.stop();
           }
-        }, 10000); // 10000 ms = 10 sec
+        }, 10000);
       });
     </script>
   </body>
