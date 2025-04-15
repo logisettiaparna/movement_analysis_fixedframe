@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <!-- Mobile-friendly viewport -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fixed Frame Photo & Video Capture</title>
+    <title>Responsive Fixed Frame Capture</title>
     <style>
       body {
         background-color: #f0f0f0;
@@ -13,27 +13,34 @@
         margin: 0;
         padding: 10px;
       }
-      /* The container will adapt to the device width, maintaining a 9:16 aspect ratio */
+
+      /* A flexible container that holds the video. The video will adapt to available width */
       #camera-container {
         position: relative;
+        display: inline-block; /* so it can shrink or grow */
+        background: #000; /* fallback background */
         width: 100%;
-        max-width: 720px;
-        /* Maintain aspect ratio 9:16 (i.e., 720:1280) */
-        padding-top: calc(100% * 1280 / 720);
-        margin: 0 auto;
-        background: #000;
+        max-width: 720px; /* a max width if you prefer */
       }
-      #video, #overlay {
+
+      /* The video is made responsive. We use object-fit: contain so it isn't cropped */
+      #video {
+        width: 100%;
+        height: auto;
+        object-fit: contain; 
+        background: #000;
+        display: block; /* remove extra space */
+      }
+
+      /* The overlay canvas is absolutely positioned on top of the video */
+      #overlay {
         position: absolute;
         top: 0;
         left: 0;
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-      }
-      #overlay {
         pointer-events: none;
+        /* We'll set width/height via JS to match the displayed video size */
       }
+
       .btn-container {
         margin-top: 20px;
       }
@@ -45,63 +52,70 @@
     </style>
   </head>
   <body>
-    <h1>Fixed Frame Capture</h1>
-    <p>Stand fully inside the fixed frame. The border will turn green if you're in frame and red if not.</p>
+    <h1>Responsive Fixed Frame Capture</h1>
+    <p>Stand fully inside the fixed frame. The border will turn green if in frame, red if not.</p>
+
     <div id="camera-container">
       <video id="video" autoplay playsinline></video>
       <canvas id="overlay"></canvas>
     </div>
+
     <div class="btn-container">
       <button id="capture-photo-btn">Capture Photo</button>
       <button id="record-video-btn">Record 10-sec Video</button>
     </div>
     
-    <!-- Load MediaPipe FaceMesh and Camera Utils -->
+    <!-- MediaPipe FaceMesh and Camera Utils -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     
     <script>
       const videoElement = document.getElementById('video');
-      const overlay = document.getElementById('overlay');
-      const ctx = overlay.getContext('2d');
+      const overlayCanvas = document.getElementById('overlay');
+      const ctx = overlayCanvas.getContext('2d');
       const capturePhotoBtn = document.getElementById('capture-photo-btn');
       const recordVideoBtn = document.getElementById('record-video-btn');
-      
-      // Set up a fixed frame as fractions of the video dimensions. 
-      // These values (0.1 to 0.9) mean a 10% margin on all sides.
+
+      // We'll define our "fixed frame" as fractions of the displayed video size (0.1..0.9).
+      // Means 10% in from each side, top, bottom.
       let fixedFrameFraction = {
         minX: 0.1,
         minY: 0.1,
         maxX: 0.9,
         maxY: 0.9
       };
-      let fixedFramePixels = null;  // pixel coordinates for the overlay
-      
-      // When the video metadata loads, update the overlay size and compute frame in pixels.
-      videoElement.addEventListener('loadedmetadata', () => {
-        overlay.width = videoElement.videoWidth;
-        overlay.height = videoElement.videoHeight;
+      let fixedFramePixels = null; // We'll compute after we know the displayed video size.
+
+      // A utility function: setOverlaySize() sets the canvas to match the video element's rendered size,
+      // then re-computes fixedFramePixels.
+      function setOverlaySize() {
+        // getBoundingClientRect() tells us the displayed size in px
+        const rect = videoElement.getBoundingClientRect();
+        // But to actually draw, we want the "internal" size of the video feed.
+        // We'll do something simpler: we assume the *DOM* size is the actual drawing size.
+        overlayCanvas.width = rect.width; 
+        overlayCanvas.height = rect.height;
+
+        // In some browsers, videoWidth / videoHeight are the actual camera feed size,
+        // but we want the DOM displayed size for the overlay alignment, so we use rect.
+
+        // Now define fixedFramePixels in terms of that displayed size.
         fixedFramePixels = {
-          minX: fixedFrameFraction.minX * videoElement.videoWidth,
-          minY: fixedFrameFraction.minY * videoElement.videoHeight,
-          maxX: fixedFrameFraction.maxX * videoElement.videoWidth,
-          maxY: fixedFrameFraction.maxY * videoElement.videoHeight
+          minX: fixedFrameFraction.minX * overlayCanvas.width,
+          minY: fixedFrameFraction.minY * overlayCanvas.height,
+          maxX: fixedFrameFraction.maxX * overlayCanvas.width,
+          maxY: fixedFrameFraction.maxY * overlayCanvas.height
         };
-      });
-      
-      // Draw the fixed frame overlay (green if valid, red if not)
-      function drawOverlay(isValid) {
-        ctx.clearRect(0, 0, overlay.width, overlay.height);
-        ctx.lineWidth = 5;
-        ctx.strokeStyle = isValid ? 'green' : 'red';
-        if (fixedFramePixels) {
-          ctx.strokeRect(fixedFramePixels.minX, fixedFramePixels.minY,
-            fixedFramePixels.maxX - fixedFramePixels.minX,
-            fixedFramePixels.maxY - fixedFramePixels.minY);
-        }
       }
-      
-      // Use MediaPipe FaceMesh to capture landmark for validation.
+
+      // We'll call setOverlaySize() whenever the window resizes or the video metadata changes.
+      function updateOverlay() {
+        setOverlaySize();
+        // We'll also redraw the last "valid" overlay status if needed.
+        drawOverlay(false); // default red on init, or you can store last state.
+      }
+
+      // The actual FaceMesh code
       const faceMesh = new FaceMesh({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
       });
@@ -112,27 +126,61 @@
         minTrackingConfidence: 0.5
       });
       faceMesh.onResults(onResults);
-      
-      let currentNose = null;  // will hold nose position in pixel coordinates.
-      
+
+      let currentNose = null; // store nose position in "overlay canvas coords"
+
+      // We'll define onResults() to do the overlay logic:
       function onResults(results) {
-        ctx.clearRect(0, 0, overlay.width, overlay.height);
+        // First ensure overlay matches the video's DOM size
+        setOverlaySize();
+
+        // Clear overlay
+        ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
         if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
           const landmarks = results.multiFaceLandmarks[0];
-          const noseLandmark = landmarks[1];  // using landmark index 1 for nose tip.
+          // landmark index 1 is often near the nose tip
+          const nose = landmarks[1];
+          // convert normalized [0..1] to overlay coords
+          // we want to multiply by overlayCanvas.width, etc.
+          // but the faceMesh library by default uses the video input size,
+          // which may differ from the DOM size. We'll do it proportionally anyway:
           currentNose = {
-            x: noseLandmark.x * overlay.width,
-            y: noseLandmark.y * overlay.height
+            x: nose.x * overlayCanvas.width,
+            y: nose.y * overlayCanvas.height
           };
+        } else {
+          currentNose = null;
         }
-        // Validate the frame: check if the nose is within the fixed frame.
-        let valid = currentNose && fixedFramePixels &&
-          (currentNose.x >= fixedFramePixels.minX && currentNose.x <= fixedFramePixels.maxX &&
-           currentNose.y >= fixedFramePixels.minY && currentNose.y <= fixedFramePixels.maxY);
-        drawOverlay(valid);
+
+        // Validate
+        let isValid = false;
+        if (currentNose && fixedFramePixels) {
+          if (currentNose.x >= fixedFramePixels.minX && currentNose.x <= fixedFramePixels.maxX &&
+              currentNose.y >= fixedFramePixels.minY && currentNose.y <= fixedFramePixels.maxY) {
+            isValid = true;
+          }
+        }
+        drawOverlay(isValid);
       }
-      
-      // Set up the camera using MediaPipe's Camera utility.
+
+      // drawOverlay() draws the green or red rectangle for the fixed frame
+      function drawOverlay(isValid) {
+        ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        ctx.lineWidth = 5;
+        ctx.strokeStyle = isValid ? 'green' : 'red';
+        if (fixedFramePixels) {
+          ctx.strokeRect(
+            fixedFramePixels.minX,
+            fixedFramePixels.minY,
+            fixedFramePixels.maxX - fixedFramePixels.minX,
+            fixedFramePixels.maxY - fixedFramePixels.minY
+          );
+        }
+      }
+
+      // We'll set up the camera using MediaPipe's Camera utility to feed into faceMesh.
+      // We'll request a 720x1280 feed, but devices may vary.
       const camera = new Camera(videoElement, {
         onFrame: async () => {
           await faceMesh.send({ image: videoElement });
@@ -141,16 +189,32 @@
         height: 1280
       });
       camera.start();
-      
+
+      // Also, whenever the window resizes, we recalc overlay.
+      window.addEventListener('resize', () => {
+        updateOverlay();
+      });
+
+      // When the video metadata is loaded, do an initial update.
+      videoElement.addEventListener('loadedmetadata', () => {
+        updateOverlay();
+      });
+
       // ---------------------------
-      // Capture Photo (and trigger download)
+      // Capture Photo (with automatic download)
       // ---------------------------
       capturePhotoBtn.addEventListener('click', () => {
+        // We create an offscreen canvas to draw the actual video frame
+        // in its real size (the camera feed).
+        const vidWidth = videoElement.videoWidth;
+        const vidHeight = videoElement.videoHeight;
         const captureCanvas = document.createElement('canvas');
-        captureCanvas.width = videoElement.videoWidth;
-        captureCanvas.height = videoElement.videoHeight;
+        captureCanvas.width = vidWidth;
+        captureCanvas.height = vidHeight;
         const captureCtx = captureCanvas.getContext('2d');
-        captureCtx.drawImage(videoElement, 0, 0, captureCanvas.width, captureCanvas.height);
+        captureCtx.drawImage(videoElement, 0, 0, vidWidth, vidHeight);
+
+        // Convert to Blob -> auto download
         captureCanvas.toBlob((blob) => {
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
@@ -162,15 +226,15 @@
           URL.revokeObjectURL(url);
         }, 'image/png');
       });
-      
+
       // ---------------------------
-      // Capture Video (up to 10 seconds, then download)
+      // Video Capture (max 10s) with auto download
       // ---------------------------
       let mediaRecorder;
       let recordedChunks = [];
       recordVideoBtn.addEventListener('click', () => {
         if (!navigator.mediaDevices || !window.MediaRecorder) {
-          alert("MediaRecorder is not supported on your mobile browser.");
+          alert("MediaRecorder is not supported on this browser.");
           return;
         }
         recordedChunks = [];
@@ -179,7 +243,7 @@
           mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
         } catch (e) {
           console.error("Error creating MediaRecorder:", e);
-          alert("Error creating MediaRecorder: " + e);
+          alert("Error: " + e);
           return;
         }
         mediaRecorder.ondataavailable = (event) => {
@@ -188,6 +252,7 @@
           }
         };
         mediaRecorder.onstop = () => {
+          // Combine chunks -> create a Blob -> auto download
           const blob = new Blob(recordedChunks, { type: 'video/webm' });
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
@@ -199,6 +264,8 @@
           URL.revokeObjectURL(url);
         };
         mediaRecorder.start();
+
+        // Stop after 10 seconds
         setTimeout(() => {
           if (mediaRecorder && mediaRecorder.state !== 'inactive') {
             mediaRecorder.stop();
