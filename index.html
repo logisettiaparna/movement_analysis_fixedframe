@@ -13,33 +13,28 @@
         padding: 10px;
         text-align: center;
       }
-
       #camera-container {
         position: relative;
-        display: inline-block; /* let content size to its intrinsic aspect ratio */
+        display: inline-block;
         background: #000;
         width: 100%;
-        max-width: 720px; /* optional max width */
+        max-width: 720px;
       }
-
-      /* The video will be scaled and keep aspect ratio with object-fit: contain. 
-         This ensures no excessive zoom or crop. */
+      /* Make the video responsive using object-fit */
       #video {
         width: 100%;
         height: auto;
         object-fit: contain;
-        display: block; /* remove small whitespace below inline-block elements */
+        display: block;
         background: #000;
       }
-
-      /* The overlay canvas is absolutely positioned over the video. We'll size it in JS to match the displayed size. */
+      /* Overlay canvas covers the video */
       #overlay {
         position: absolute;
         top: 0;
         left: 0;
-        pointer-events: none; /* clicks pass through */
+        pointer-events: none;
       }
-
       .btn-container {
         margin-top: 20px;
       }
@@ -52,40 +47,55 @@
   </head>
   <body>
     <h1>Responsive Fixed Frame Capture</h1>
-    <p>Please stand within the fixed frame (green if valid, red if not).</p>
-
+    <p>Please ensure you are fully within the fixed frame. (The border should be green when in frame and red if you're out.)</p>
     <div id="camera-container">
       <video id="video" autoplay playsinline></video>
       <canvas id="overlay"></canvas>
     </div>
-
     <div class="btn-container">
       <button id="capture-photo-btn">Capture Photo</button>
       <button id="record-video-btn">Record 10-sec Video</button>
     </div>
 
-    <!-- Load MediaPipe FaceMesh -->
+    <!-- Load MediaPipe FaceMesh and Camera Utils -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
-
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    
     <script>
-      // HTML elements
       const videoElement = document.getElementById('video');
       const overlayCanvas = document.getElementById('overlay');
       const ctx = overlayCanvas.getContext('2d');
-
       const capturePhotoBtn = document.getElementById('capture-photo-btn');
-      const recordVideoBtn  = document.getElementById('record-video-btn');
+      const recordVideoBtn = document.getElementById('record-video-btn');
 
-      // We'll define a fraction-based "fixed frame". For example, 10% in from each edge:
+      // Define fixed frame as fractions: 10% in from each side.
       const fixedFrameFraction = {
         minX: 0.1,
         minY: 0.1,
         maxX: 0.9,
         maxY: 0.9
       };
-      let fixedFramePixels = null; // computed from the displayed size
+      let fixedFramePixels = null; // will compute after video has loaded
 
-      // FaceMesh instance
+      // Update overlay size to match video element's displayed size
+      function updateOverlaySize() {
+        const rect = videoElement.getBoundingClientRect();
+        overlayCanvas.width = rect.width;
+        overlayCanvas.height = rect.height;
+        fixedFramePixels = {
+          minX: fixedFrameFraction.minX * rect.width,
+          minY: fixedFrameFraction.minY * rect.height,
+          maxX: fixedFrameFraction.maxX * rect.width,
+          maxY: fixedFrameFraction.maxY * rect.height
+        };
+      }
+
+      // Call updateOverlaySize on loadeddata and resize events.
+      videoElement.addEventListener('loadedmetadata', updateOverlaySize);
+      videoElement.addEventListener('loadeddata', updateOverlaySize);
+      window.addEventListener('resize', updateOverlaySize);
+
+      // FaceMesh setup to get a key landmark (nose tip) from the video feed.
       const faceMesh = new FaceMesh({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
       });
@@ -95,74 +105,32 @@
         minDetectionConfidence: 0.5,
         minTrackingConfidence: 0.5
       });
-
-      let currentNose = null; // nose position in overlay coords
       faceMesh.onResults(onFaceMeshResults);
 
-      // The plan:
-      // 1) We'll getUserMedia(...) with constraints (rear camera).
-      // 2) We'll display the stream in <video>.
-      // 3) We'll repeatedly call faceMesh.send({image: videoElement}) in a requestAnimationFrame loop.
-
-      async function initCamera() {
-        try {
-          const constraints = {
-            audio: false,
-            video: {
-              facingMode: { ideal: 'environment' }, // request rear camera if available
-              width:  { ideal: 1280 },
-              height: { ideal: 720 }
-            }
-          };
-          const stream = await navigator.mediaDevices.getUserMedia(constraints);
-          videoElement.srcObject = stream;
-          videoElement.play();
-        } catch(e) {
-          alert("Error accessing camera: " + e);
-          console.error(e);
-        }
-      }
-
-      // We'll sync the overlay canvas to match the displayed video size in DOM.
-      function updateOverlaySize() {
-        const rect = videoElement.getBoundingClientRect();
-        overlayCanvas.width  = rect.width;
-        overlayCanvas.height = rect.height;
-
-        // Now define the frame in pixel coords:
-        fixedFramePixels = {
-          minX: rect.width  * fixedFrameFraction.minX,
-          minY: rect.height * fixedFrameFraction.minY,
-          maxX: rect.width  * fixedFrameFraction.maxX,
-          maxY: rect.height * fixedFrameFraction.maxY
-        };
-      }
+      let currentNose = null; // stores nose position (in overlay coords)
 
       function onFaceMeshResults(results) {
-        // Make sure overlay is correct size
         updateOverlaySize();
         ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
-        // If face is found, get nose position
+        // If face landmarks are available, use nose (index 1).
         if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
           const landmarks = results.multiFaceLandmarks[0];
-          const nose = landmarks[1]; // index 1 is near nose tip
-          // Convert normalized coords [0..1] to overlay coords
+          const noseLandmark = landmarks[1];
           currentNose = {
-            x: nose.x * overlayCanvas.width,
-            y: nose.y * overlayCanvas.height
+            x: noseLandmark.x * overlayCanvas.width,
+            y: noseLandmark.y * overlayCanvas.height
           };
         } else {
           currentNose = null;
         }
-        // Validate if nose is in fixedFrame
+        // If no face is detected, force drawing the frame (red by default).
         let isValid = false;
         if (currentNose && fixedFramePixels) {
-          if (currentNose.x >= fixedFramePixels.minX && currentNose.x <= fixedFramePixels.maxX &&
-              currentNose.y >= fixedFramePixels.minY && currentNose.y <= fixedFramePixels.maxY) {
-            isValid = true;
-          }
+          isValid = (currentNose.x >= fixedFramePixels.minX && currentNose.x <= fixedFramePixels.maxX &&
+                     currentNose.y >= fixedFramePixels.minY && currentNose.y <= fixedFramePixels.maxY);
         }
+        // Fallback: even if face is not detected, draw the fixed frame in red.
         drawOverlay(isValid);
       }
 
@@ -180,25 +148,53 @@
         }
       }
 
-      // We'll run FaceMesh in a requestAnimationFrame loop
-      // so it continuously tracks the face from the video feed.
-      async function faceMeshLoop() {
-        await faceMesh.send({ image: videoElement });
+      // Instead of using MediaPipe's Camera util, we use standard getUserMedia with explicit constraints.
+      async function initCamera() {
+        try {
+          const constraints = {
+            audio: false,
+            video: {
+              facingMode: { ideal: "environment" },
+              width: { ideal: 1280 },
+              height: { ideal: 720 }
+            }
+          };
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          videoElement.srcObject = stream;
+          videoElement.play();
+        } catch (e) {
+          alert("Error accessing camera: " + e);
+          console.error(e);
+        }
+      }
+
+      // Start camera and start our FaceMesh loop (using requestAnimationFrame).
+      async function startFaceMeshLoop() {
+        await initCamera();
         requestAnimationFrame(faceMeshLoop);
       }
 
-      // Photo capture logic
+      async function faceMeshLoop() {
+        if (videoElement.readyState >= 2) {
+          await faceMesh.send({ image: videoElement });
+        }
+        requestAnimationFrame(faceMeshLoop);
+      }
+
+      startFaceMeshLoop();
+
+      // ---------------------------
+      // Capture Photo (Download to user's device)
+      // ---------------------------
       capturePhotoBtn.addEventListener('click', () => {
-        // Capture from the real camera resolution (videoWidth / videoHeight).
+        // Use the actual video stream resolution.
         const vidW = videoElement.videoWidth;
         const vidH = videoElement.videoHeight;
         const capCanvas = document.createElement('canvas');
-        capCanvas.width  = vidW;
+        capCanvas.width = vidW;
         capCanvas.height = vidH;
-
-        const cctx = capCanvas.getContext('2d');
-        cctx.drawImage(videoElement, 0, 0, vidW, vidH);
-
+        const capCtx = capCanvas.getContext('2d');
+        capCtx.drawImage(videoElement, 0, 0, vidW, vidH);
         capCanvas.toBlob((blob) => {
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
@@ -211,12 +207,14 @@
         }, 'image/png');
       });
 
-      // Video capture logic (max 10 sec)
+      // ---------------------------
+      // Capture Video (10 sec, Download)
+      // ---------------------------
       let mediaRecorder;
       let recordedChunks = [];
       recordVideoBtn.addEventListener('click', () => {
         if (!navigator.mediaDevices || !window.MediaRecorder) {
-          alert("MediaRecorder is not supported on this browser/device.");
+          alert("MediaRecorder is not supported on this device.");
           return;
         }
         recordedChunks = [];
@@ -232,9 +230,9 @@
           alert("MediaRecorder error: " + e);
           return;
         }
-        mediaRecorder.ondataavailable = (evt) => {
-          if (evt.data && evt.data.size > 0) {
-            recordedChunks.push(evt.data);
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data && event.data.size > 0) {
+            recordedChunks.push(event.data);
           }
         };
         mediaRecorder.onstop = () => {
@@ -248,28 +246,12 @@
           document.body.removeChild(a);
           URL.revokeObjectURL(url);
         };
-
         mediaRecorder.start();
         setTimeout(() => {
           if (mediaRecorder && mediaRecorder.state !== 'inactive') {
             mediaRecorder.stop();
           }
         }, 10000);
-      });
-
-      // Initialize camera
-      initCamera();
-      // Start the FaceMesh loop once the camera is ready
-      requestAnimationFrame(faceMeshLoop);
-
-      // Whenever window resizes, recalc overlay
-      window.addEventListener('resize', () => {
-        updateOverlaySize();
-      });
-
-      // Also after video has loaded some data, we update.
-      videoElement.addEventListener('loadeddata', () => {
-        updateOverlaySize();
       });
     </script>
   </body>
