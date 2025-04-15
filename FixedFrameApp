@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Fixed Frame Photo Capture</title>
+  <style>
+    body {
+      background-color: #f0f0f0;
+      font-family: Arial, sans-serif;
+      text-align: center;
+      margin: 0;
+      padding: 20px;
+    }
+    #camera-container {
+      position: relative;
+      width: 720px;
+      height: 1280px;
+      margin: 0 auto;
+      background: #000;
+    }
+    /* Video fills the container */
+    #video {
+      width: 720px;
+      height: 1280px;
+      object-fit: cover;
+    }
+    /* Overlay canvas for drawing fixed frame */
+    #overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 720px;
+      height: 1280px;
+      pointer-events: none; /* Allow clicks to pass through to video */
+    }
+    #capture-btn {
+      margin-top: 20px;
+      padding: 10px 20px;
+      font-size: 1.2em;
+    }
+  </style>
+</head>
+<body>
+  <h1>Fixed Frame Photo Capture</h1>
+  <p>Please position yourself so that you are fully within the fixed frame.</p>
+  <div id="camera-container">
+    <video id="video" autoplay playsinline></video>
+    <canvas id="overlay"></canvas>
+  </div>
+  <button id="capture-btn">Capture Photo</button>
+  
+  <script>
+    // Get references to the video element and the overlay canvas.
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const ctx = overlay.getContext('2d');
+    const captureBtn = document.getElementById('capture-btn');
+
+    // Define the fixed frame (in pixels) within our container.
+    // You can adjust these numbers as needed.
+    const fixedFrame = { minX: 50, minY: 50, maxX: 670, maxY: 1230 };
+
+    // Function to draw the fixed frame overlay.
+    function drawOverlay(isValid) {
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = isValid ? 'green' : 'red';
+      ctx.strokeRect(fixedFrame.minX, fixedFrame.minY, fixedFrame.maxX - fixedFrame.minX, fixedFrame.maxY - fixedFrame.minY);
+    }
+
+    // Dummy validation function. For a demo you might simply return true.
+    // You can enhance this later with computer vision checks, etc.
+    function isFrameValid() {
+      // Here you might analyze the video feed (or some landmarks) to check that the person is inside the region.
+      // For now, we simply always return true.
+      return true;
+    }
+
+    // Access the camera.
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ video: { width: 720, height: 1280 } })
+        .then(stream => {
+          video.srcObject = stream;
+          video.play();
+        })
+        .catch(err => {
+          console.error("Error accessing camera: ", err);
+          alert("Unable to access the camera. Make sure your browser supports camera access.");
+        });
+    } else {
+      alert("Camera access is not supported by your browser.");
+    }
+
+    // Draw the overlay at regular intervals.
+    setInterval(() => {
+      drawOverlay(isFrameValid());
+    }, 100);
+
+    // Capture the image when the user clicks the Capture button.
+    captureBtn.addEventListener('click', () => {
+      // Create an offscreen canvas to capture the still image.
+      const captureCanvas = document.createElement('canvas');
+      captureCanvas.width = 720;
+      captureCanvas.height = 1280;
+      const captureCtx = captureCanvas.getContext('2d');
+      captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+      
+      // For testing, open the captured image in a new tab.
+      const dataURL = captureCanvas.toDataURL('image/png');
+      window.open(dataURL, '_blank');
+      
+      // You could also send the dataURL to your backend via an AJAX request for further processing.
+    });
+  </script>
+</body>
+</html>
