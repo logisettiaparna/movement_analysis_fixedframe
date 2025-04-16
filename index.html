@@ -2,30 +2,53 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Full‐Body Fixed Frame</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>Fixed Frame Full‑Body Capture</title>
   <style>
-    body { margin:0; padding:10px; text-align:center; font-family:Arial,sans-serif; background:#f0f0f0; }
-    #layout { display:flex; flex-direction:column; align-items:center; gap:20px; }
-    #canvas-wrap {
-      position:relative;
-      height:90vh;
-      max-width:calc(90vh * 9 /16);
-      background:#000;
+    body {
+      margin: 0; padding: 10px;
+      text-align: center;
+      font-family: Arial, sans-serif;
+      background: #f0f0f0;
     }
-    #displayCanvas { width:100%; height:100%; display:block; }
-    .btns { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
-    button { padding:10px 20px; font-size:1em; }
-    @media(min-width:900px){
-      #layout { flex-direction:row; align-items:flex-start; }
-      .btns { flex-direction:column; margin-left:20px; }
-      button { padding:12px 18px; font-size:1.1em; }
+    #layout {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+    #canvas-wrap {
+      position: relative;
+      height: 90vh;
+      max-width: calc(90vh * 9 / 16);
+      margin: 0 auto;
+      background: #000;
+    }
+    #displayCanvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    .btns {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 1em;
+    }
+    @media(min-width:900px) {
+      #layout { flex-direction: row; align-items: flex-start; }
+      .btns { flex-direction: column; margin-left: 20px; }
+      button { padding: 12px 18px; font-size: 1.1em; }
     }
   </style>
 </head>
 <body>
-  <h1>Full‐Body Fixed Frame</h1>
-  <p>Keep your **entire** body inside the box (green = good, red = any part outside).</p>
+  <h1>Fixed Frame Full‑Body Capture</h1>
+  <p>Keep your <strong>entire</strong> body in the box (green=in frame, red=any part outside).</p>
   <div id="layout">
     <div id="canvas-wrap">
       <video id="hiddenVideo" autoplay playsinline muted style="display:none;"></video>
@@ -40,108 +63,102 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js"></script>
   <script>
   (async()=>{
-    // DOM
+    // Elements
     const video = document.getElementById('hiddenVideo');
     const canvas = document.getElementById('displayCanvas');
     const ctx = canvas.getContext('2d');
     const snapBtn = document.getElementById('snap');
     const recBtn  = document.getElementById('rec');
 
-    // 1) GET CAMERA (rear on mobile, front on desktop)
+    // Offscreen mask canvas
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = canvas.width;
+    maskCanvas.height= canvas.height;
+    const maskCtx = maskCanvas.getContext('2d');
+
+    // 1) Camera
     const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video:{ facingMode: isMobile?'environment':'user' },
-        audio:false
+        video:{ facingMode: isMobile?'environment':'user' }, audio:false
       });
       video.srcObject = stream;
       await video.play();
     } catch(e) {
-      return alert('Camera failed: '+e.message);
+      alert('Camera access failed: '+e.message);
+      return;
     }
 
-    // 2) SETUP SELFIE SEGMENTATION
+    // 2) Selfie Segmentation
     const seg = new SelfieSegmentation({
       locateFile: f=>'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/'+f
     });
     seg.setOptions({ modelSelection:1 });
-    let segMask = null;
-    seg.onResults(r=>{ segMask = r.segmentationMask; });
+    let segMaskImg = null;
+    seg.onResults(r=>{ segMaskImg = r.segmentationMask; });
 
-    // 3) FIXED FRAME FRACTIONS
-    const F = { minX:0.1, maxX:0.9, minY:0.1, maxY:0.9 };
+    // 3) Fixed frame
+    const F={minX:0.1,maxX:0.9,minY:0.1,maxY:0.9};
 
-    // 4) DRAW LOOP
+    // Draw loop
     async function loop(){
-      // draw camera into canvas (cover style)
+      // Draw video into canvas (cover)
       const vw=video.videoWidth, vh=video.videoHeight;
       const cw=canvas.width, ch=canvas.height;
-      const s=Math.max(cw/vw, ch/vh),
-            sw=cw/s, sh=ch/s,
-            sx=(vw-sw)/2, sy=(vh-sh)/2;
-      ctx.drawImage(video, sx,sy, sw,sh, 0,0, cw,ch);
+      const scale=Math.max(cw/vw, ch/vh);
+      const sw=cw/scale, sh=ch/scale;
+      const sx=(vw-sw)/2, sy=(vh-sh)/2;
+      ctx.drawImage(video, sx,sy, sw,sh, 0,0,cw,ch);
 
-      // run segmentation on the same frame
+      // Run segmentation
       await seg.send({image:canvas});
-
-      // get mask pixels
-      ctx.save();
-      ctx.globalAlpha = 0.5;
-      ctx.drawImage(segMask, 0,0, cw,ch);
-      ctx.restore();
-
-      // sample outside-box region for ANY person pixel
-      const img = ctx.getImageData(0,0,cw,ch).data;
-      const left = F.minX*cw, right = F.maxX*cw;
-      const top  = F.minY*ch, bottom= F.maxY*ch;
-      let anyOutside=false;
-
-      // scan only a subset for speed: every 10px
-      for(let y=0;y<ch && !anyOutside;y+=10){
-        for(let x=0;x<cw && !anyOutside;x+=10){
-          // if x,y is OUTSIDE the frame:
-          if(x<left||x>right||y<top||y>bottom){
-            const idx = (y*cw + x)*4;
-            // mask drawn semi-transparent green; we check the GREEN channel strong
-            if(img[idx+1] > 100){
-              anyOutside=true;
+      if(segMaskImg){
+        // Draw mask offscreen
+        maskCtx.clearRect(0,0,cw,ch);
+        maskCtx.drawImage(segMaskImg,0,0,cw,ch);
+        // Get mask data
+        const data=maskCtx.getImageData(0,0,cw,ch).data;
+        // Check outside-box
+        let anyOutside=false;
+        const left=F.minX*cw, right=F.maxX*cw;
+        const top=F.minY*ch, bottom=F.maxY*ch;
+        for(let y=0; y<ch && !anyOutside; y+=10){
+          for(let x=0; x<cw && !anyOutside; x+=10){
+            if(x<left||x>right||y<top||y>bottom){
+              const idx=(y*cw+x)*4;
+              if(data[idx]>0.5*255){ anyOutside=true; }
             }
           }
         }
+        // Draw box
+        ctx.lineWidth=6;
+        ctx.strokeStyle= anyOutside?'red':'lime';
+        ctx.strokeRect(left, top, right-left, bottom-top);
       }
-
-      // draw fixed-frame border
-      ctx.lineWidth=6;
-      ctx.strokeStyle = anyOutside?'red':'lime';
-      ctx.strokeRect(left, top, right-left, bottom-top);
 
       requestAnimationFrame(loop);
     }
     loop();
 
-    // 5) SNAP PHOTO
+    // Photo
     snapBtn.onclick = ()=>{
       canvas.toBlob(b=>{
         const a=document.createElement('a');
         a.href=URL.createObjectURL(b);
-        a.download='photo.png';
-        a.click();
-      });
+        a.download='photo.png';a.click();
+      },'image/png');
     };
-
-    // 6) RECORD 10 s VIDEO
+    // Video
     recBtn.onclick = ()=>{
-      const recorder = new MediaRecorder(canvas.captureStream(30),{mimeType:'video/webm'});
+      const rec=new MediaRecorder(canvas.captureStream(30),{mimeType:'video/webm'});
       let parts=[];
-      recorder.ondataavailable = e=>{ if(e.data.size) parts.push(e.data); };
-      recorder.onstop = ()=>{
-        const blob=new Blob(parts,{type:'video/webm'}), a=document.createElement('a');
-        a.href=URL.createObjectURL(blob);
-        a.download='video.webm';
-        a.click();
+      rec.ondataavailable=e=>{ if(e.data.size) parts.push(e.data); };
+      rec.onstop=()=>{
+        const blob=new Blob(parts,{type:'video/webm'});
+        const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+        a.download='video.webm';a.click();
       };
-      recorder.start();
-      setTimeout(()=>recorder.stop(),10000);
+      rec.start(); setTimeout(()=>rec.stop(),10000);
     };
   })();
   </script>
