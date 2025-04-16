@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <!-- Mobile-friendly viewport -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vertical Fixed Frame Capture</title>
+    <title>Wider Vertical Fixed Frame</title>
     <style>
       body {
         background-color: #f0f0f0;
@@ -14,30 +14,28 @@
         text-align: center;
       }
 
-      /* A container that enforces a 9:16 (portrait) aspect ratio. 
-         The user will see a tall video region, easier for full-body shots. */
+      /* The container enforces a 9:16 aspect ratio. */
       #camera-container {
         position: relative;
         margin: 0 auto;
-        /* The aspect-ratio property is widely supported in modern browsers. */
-        aspect-ratio: 9 / 16; 
+        aspect-ratio: 9 / 16;
         width: 100%;
-        max-width: 450px; /* or 540, or 720 if you prefer bigger on desktop */
-        background: #000;  /* fallback */
-      }
-
-      /* The video is set to fill this container, maintaining portrait orientation. */
-      #video {
-        position: absolute;
-        top: 0; 
-        left: 0;
-        width: 100%;
-        height: 100%;
-        object-fit: cover; /* fill area, possibly cropping if aspect ratio differs */
+        max-width: 450px; /* Increase if you want a larger preview on desktop. */
         background: #000;
       }
 
-      /* The overlay canvas is also absolutely positioned over the video */
+      /* The video is set to fill this container. object-fit: cover can crop if aspect ratio differs. */
+      #video {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        background: #000;
+      }
+
+      /* The overlay canvas is absolutely positioned over the video. */
       #overlay {
         position: absolute;
         top: 0;
@@ -58,7 +56,7 @@
     </style>
   </head>
   <body>
-    <h1>Vertical Fixed Frame Capture</h1>
+    <h1>Wider Vertical Fixed Frame</h1>
     <p>Please stand fully inside the bounding box (green if valid, red if not).</p>
     <div id="camera-container">
       <video id="video" autoplay playsinline></video>
@@ -81,22 +79,18 @@
       const capturePhotoBtn = document.getElementById('capture-photo-btn');
       const recordVideoBtn  = document.getElementById('record-video-btn');
 
-      /* 
-         We define a narrower bounding box fraction so the user sees a taller region 
-         and doesn't have to stand extremely far away. For example:
-         minX=0.2, maxX=0.8 => only 60% of the width
-         minY=0.05, maxY=0.95 => 90% of the height
-         Adjust as needed.
-      */
+      /* Now we define a bounding box that uses 80% of the width 
+         (from 10% in to 90% in) and 90% of the height 
+         (from 5% to 95%). Adjust as desired. */
       const fixedFrameFraction = {
-        minX: 0.2, 
-        maxX: 0.8,
+        minX: 0.1,
+        maxX: 0.9, 
         minY: 0.05,
         maxY: 0.95
       };
-      let fixedFramePixels = null;
+      let fixedFramePixels = null; 
 
-      // FaceMesh setup to detect the nose for validation.
+      // FaceMesh instance to detect the nose (landmark index 1).
       const faceMesh = new FaceMesh({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
       });
@@ -111,15 +105,13 @@
       let currentNose = null;
 
       function onFaceMeshResults(results) {
-        // Always ensure overlay matches the container
         updateOverlaySize();
-
         ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
         if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
           const landmarks = results.multiFaceLandmarks[0];
-          // Landmark 1 is near the nose tip
-          const nose = landmarks[1];
-          // Convert normalized [0..1] to the overlay's pixel coords
+          const nose = landmarks[1]; // index 1 is nose tip
+          // Convert normalized [0..1] to overlay coords
           currentNose = {
             x: nose.x * overlayCanvas.width,
             y: nose.y * overlayCanvas.height
@@ -152,14 +144,13 @@
         }
       }
 
-      // We'll use getUserMedia for the rear camera if available.
       async function initCamera() {
         try {
           const constraints = {
             audio: false,
             video: {
               facingMode: { ideal: 'environment' },
-              width: { ideal: 720 },   // Try a vertical-friendly resolution
+              width: { ideal: 720 },
               height: { ideal: 1280 }
             }
           };
@@ -172,24 +163,20 @@
         }
       }
 
-      // Update overlay size to match displayed video
+      // Set overlay size to match the displayed video dimension
       function updateOverlaySize() {
-        // The parent container has aspect-ratio: 9/16. 
-        // So we measure the *actual* boundingClientRect of the video.
         const rect = videoElement.getBoundingClientRect();
-        overlayCanvas.width  = rect.width;
+        overlayCanvas.width = rect.width;
         overlayCanvas.height = rect.height;
-
-        // Compute bounding box
         fixedFramePixels = {
-          minX: fixedFrameFraction.minX * rect.width,
-          maxX: fixedFrameFraction.maxX * rect.width,
-          minY: fixedFrameFraction.minY * rect.height,
-          maxY: fixedFrameFraction.maxY * rect.height
+          minX: rect.width  * fixedFrameFraction.minX,
+          maxX: rect.width  * fixedFrameFraction.maxX,
+          minY: rect.height * fixedFrameFraction.minY,
+          maxY: rect.height * fixedFrameFraction.maxY
         };
       }
 
-      // We'll run FaceMesh manually in a loop
+      // We'll manually loop FaceMesh
       async function faceMeshLoop() {
         if (videoElement.readyState >= 2) {
           await faceMesh.send({ image: videoElement });
@@ -197,13 +184,9 @@
         requestAnimationFrame(faceMeshLoop);
       }
 
-      // Start everything
       async function startAll() {
         await initCamera();
-        // Wait for the video to have some data
-        videoElement.addEventListener('loadeddata', () => {
-          updateOverlaySize();
-        });
+        videoElement.addEventListener('loadeddata', updateOverlaySize);
         window.addEventListener('resize', updateOverlaySize);
         requestAnimationFrame(faceMeshLoop);
       }
@@ -230,25 +213,25 @@
         }, 'image/png');
       });
 
-      // Video capture (10 sec)
+      // 10-sec video capture
       let mediaRecorder;
       let recordedChunks = [];
       recordVideoBtn.addEventListener('click', () => {
         if (!navigator.mediaDevices || !window.MediaRecorder) {
-          alert("MediaRecorder not supported on this browser/device.");
+          alert("MediaRecorder not supported.");
           return;
         }
         recordedChunks = [];
         const stream = videoElement.srcObject;
         if (!stream) {
-          alert("No camera stream available.");
+          alert("No camera stream found.");
           return;
         }
         try {
           mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
         } catch (e) {
           console.error("MediaRecorder error:", e);
-          alert("Cannot create MediaRecorder: " + e);
+          alert("Error creating MediaRecorder: " + e);
           return;
         }
         mediaRecorder.ondataavailable = (evt) => {
