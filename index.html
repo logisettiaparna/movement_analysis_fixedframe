@@ -1,262 +1,145 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <!-- Mobile-friendly viewport -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Wider Vertical Fixed Frame</title>
-    <style>
-      body {
-        background-color: #f0f0f0;
-        font-family: Arial, sans-serif;
-        margin: 0;
-        padding: 10px;
-        text-align: center;
-      }
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Canvas‑Based Fixed‐Frame Capture</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 10px;
+      text-align: center;
+      background: #f0f0f0;
+      font-family: Arial, sans-serif;
+    }
+    #canvas-container {
+      position: relative;
+      margin: 0 auto;
+      /* Will display at max 720px wide, and keep 9:16 aspect ratio */
+      width: 100%;
+      max-width: 720px;
+    }
+    #displayCanvas {
+      width: 100%;
+      height: auto;
+      background: #000;
+      display: block;
+    }
+    .btns {
+      margin-top: 10px;
+    }
+    button {
+      margin: 0 5px;
+      padding: 10px 20px;
+      font-size: 1.1em;
+    }
+  </style>
+</head>
+<body>
+  <h1>Fixed‐Frame Capture</h1>
+  <p>Fit your full body inside the box (green = good, red = out of frame).</p>
 
-      /* The container enforces a 9:16 aspect ratio. */
-      #camera-container {
-        position: relative;
-        margin: 0 auto;
-        aspect-ratio: 9 / 16;
-        width: 100%;
-        max-width: 450px; /* Increase if you want a larger preview on desktop. */
-        background: #000;
-      }
+  <div id="canvas-container">
+    <!-- hidden video: we draw from this into canvas -->
+    <video id="hiddenVideo" autoplay playsinline muted style="display:none;"></video>
+    <!-- display canvas -->
+    <canvas id="displayCanvas" width="720" height="1280"></canvas>
+  </div>
 
-      /* The video is set to fill this container. object-fit: cover can crop if aspect ratio differs. */
-      #video {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        background: #000;
-      }
+  <div class="btns">
+    <button id="capturePhoto">Capture Photo</button>
+    <button id="recordVideo">Record 10 sec Video</button>
+  </div>
 
-      /* The overlay canvas is absolutely positioned over the video. */
-      #overlay {
-        position: absolute;
-        top: 0;
-        left: 0;
-        pointer-events: none;
-        width: 100%;
-        height: 100%;
-      }
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+  <script>
+  (async()=> {
+    const video = document.getElementById('hiddenVideo');
+    const canvas = document.getElementById('displayCanvas');
+    const ctx = canvas.getContext('2d');
+    const btnPhoto = document.getElementById('capturePhoto');
+    const btnVideo = document.getElementById('recordVideo');
 
-      .btn-container {
-        margin-top: 20px;
-      }
-      button {
-        margin: 5px;
-        padding: 10px 20px;
-        font-size: 1.2em;
-      }
-    </style>
-  </head>
-  <body>
-    <h1>Wider Vertical Fixed Frame</h1>
-    <p>Please stand fully inside the bounding box (green if valid, red if not).</p>
-    <div id="camera-container">
-      <video id="video" autoplay playsinline></video>
-      <canvas id="overlay"></canvas>
-    </div>
+    // 1) Get camera stream (rear if possible):
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' }, audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
 
-    <div class="btn-container">
-      <button id="capture-photo-btn">Capture Photo</button>
-      <button id="record-video-btn">Record 10-sec Video</button>
-    </div>
+    // 2) Setup FaceMesh to detect nose:
+    const faceMesh = new FaceMesh({ locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+    faceMesh.setOptions({ maxNumFaces:1, refineLandmarks:true, minDetectionConfidence:0.5, minTrackingConfidence:0.5 });
+    let nosePos = null;
+    faceMesh.onResults(r=>{
+      if(r.multiFaceLandmarks && r.multiFaceLandmarks[0]){
+        const n = r.multiFaceLandmarks[0][1];
+        nosePos = { x: n.x * canvas.width, y: n.y * canvas.height };
+      } else nosePos = null;
+    });
 
-    <!-- MediaPipe FaceMesh -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
-    
-    <script>
-      const videoElement = document.getElementById('video');
-      const overlayCanvas = document.getElementById('overlay');
-      const ctx = overlayCanvas.getContext('2d');
+    // 3) Fixed‐frame fractions:
+    const F = { minX:0.1, maxX:0.9, minY:0.1, maxY:0.9 };  // 80% wide, 80% tall
+    const drawBox = valid=>{
+      ctx.strokeStyle = valid?'#0f0':'#f00';
+      ctx.lineWidth = 6;
+      const w = canvas.width, h = canvas.height;
+      ctx.strokeRect(F.minX*w, F.minY*h, (F.maxX-F.minX)*w, (F.maxY-F.minY)*h);
+    };
 
-      const capturePhotoBtn = document.getElementById('capture-photo-btn');
-      const recordVideoBtn  = document.getElementById('record-video-btn');
+    // 4) Cover‐style drawVideo into canvas:
+    function drawVideoCover(){
+      const vw=video.videoWidth, vh=video.videoHeight;
+      const cw=canvas.width, ch=canvas.height;
+      // cover ratio:
+      const scale = Math.max(cw/vw, ch/vh);
+      const sw = cw/scale, sh = ch/scale;
+      const sx = (vw-sw)/2, sy=(vh-sh)/2;
+      ctx.drawImage(video, sx, sy, sw, sh, 0,0,cw,ch);
+    }
 
-      /* Now we define a bounding box that uses 80% of the width 
-         (from 10% in to 90% in) and 90% of the height 
-         (from 5% to 95%). Adjust as desired. */
-      const fixedFrameFraction = {
-        minX: 0.1,
-        maxX: 0.9, 
-        minY: 0.05,
-        maxY: 0.95
+    // 5) Main loop: draw, run FaceMesh, overlay box
+    async function loop(){
+      drawVideoCover();
+      await faceMesh.send({image:canvas});
+      const valid = !!nosePos
+        && nosePos.x>=F.minX*canvas.width
+        && nosePos.x<=F.maxX*canvas.width
+        && nosePos.y>=F.minY*canvas.height
+        && nosePos.y<=F.maxY*canvas.height;
+      drawBox(valid);
+      requestAnimationFrame(loop);
+    }
+    loop();
+
+    // 6) Photo capture:
+    btnPhoto.onclick = ()=>{
+      canvas.toBlob(b=>{
+        const a=document.createElement('a');
+        a.href=URL.createObjectURL(b);
+        a.download='photo.png';
+        a.click();
+        URL.revokeObjectURL(a.href);
+      },'image/png');
+    };
+
+    // 7) Video capture from the canvas stream:
+    btnVideo.onclick = ()=>{
+      const rec = new MediaRecorder(canvas.captureStream(30), {mimeType:'video/webm'});
+      let chunks=[];
+      rec.ondataavailable = e=>chunks.push(e.data);
+      rec.onstop = ()=>{
+        const blob=new Blob(chunks,{type:'video/webm'});
+        const a=document.createElement('a');
+        a.href=URL.createObjectURL(blob);
+        a.download='video.webm';
+        a.click();
+        URL.revokeObjectURL(a.href);
       };
-      let fixedFramePixels = null; 
-
-      // FaceMesh instance to detect the nose (landmark index 1).
-      const faceMesh = new FaceMesh({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-      });
-      faceMesh.setOptions({
-        maxNumFaces: 1,
-        refineLandmarks: true,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
-      faceMesh.onResults(onFaceMeshResults);
-
-      let currentNose = null;
-
-      function onFaceMeshResults(results) {
-        updateOverlaySize();
-        ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-
-        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-          const landmarks = results.multiFaceLandmarks[0];
-          const nose = landmarks[1]; // index 1 is nose tip
-          // Convert normalized [0..1] to overlay coords
-          currentNose = {
-            x: nose.x * overlayCanvas.width,
-            y: nose.y * overlayCanvas.height
-          };
-        } else {
-          currentNose = null;
-        }
-
-        let isValid = false;
-        if (currentNose && fixedFramePixels) {
-          if (currentNose.x >= fixedFramePixels.minX && currentNose.x <= fixedFramePixels.maxX &&
-              currentNose.y >= fixedFramePixels.minY && currentNose.y <= fixedFramePixels.maxY) {
-            isValid = true;
-          }
-        }
-        drawOverlay(isValid);
-      }
-
-      function drawOverlay(isValid) {
-        ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-        ctx.lineWidth = 5;
-        ctx.strokeStyle = isValid ? 'green' : 'red';
-        if (fixedFramePixels) {
-          ctx.strokeRect(
-            fixedFramePixels.minX,
-            fixedFramePixels.minY,
-            fixedFramePixels.maxX - fixedFramePixels.minX,
-            fixedFramePixels.maxY - fixedFramePixels.minY
-          );
-        }
-      }
-
-      async function initCamera() {
-        try {
-          const constraints = {
-            audio: false,
-            video: {
-              facingMode: { ideal: 'environment' },
-              width: { ideal: 720 },
-              height: { ideal: 1280 }
-            }
-          };
-          const stream = await navigator.mediaDevices.getUserMedia(constraints);
-          videoElement.srcObject = stream;
-          videoElement.play();
-        } catch (e) {
-          alert("Error accessing camera: " + e);
-          console.error(e);
-        }
-      }
-
-      // Set overlay size to match the displayed video dimension
-      function updateOverlaySize() {
-        const rect = videoElement.getBoundingClientRect();
-        overlayCanvas.width = rect.width;
-        overlayCanvas.height = rect.height;
-        fixedFramePixels = {
-          minX: rect.width  * fixedFrameFraction.minX,
-          maxX: rect.width  * fixedFrameFraction.maxX,
-          minY: rect.height * fixedFrameFraction.minY,
-          maxY: rect.height * fixedFrameFraction.maxY
-        };
-      }
-
-      // We'll manually loop FaceMesh
-      async function faceMeshLoop() {
-        if (videoElement.readyState >= 2) {
-          await faceMesh.send({ image: videoElement });
-        }
-        requestAnimationFrame(faceMeshLoop);
-      }
-
-      async function startAll() {
-        await initCamera();
-        videoElement.addEventListener('loadeddata', updateOverlaySize);
-        window.addEventListener('resize', updateOverlaySize);
-        requestAnimationFrame(faceMeshLoop);
-      }
-      startAll();
-
-      // Photo capture
-      capturePhotoBtn.addEventListener('click', () => {
-        const vidW = videoElement.videoWidth;
-        const vidH = videoElement.videoHeight;
-        const capCanvas = document.createElement('canvas');
-        capCanvas.width = vidW;
-        capCanvas.height = vidH;
-        const cctx = capCanvas.getContext('2d');
-        cctx.drawImage(videoElement, 0, 0, vidW, vidH);
-        capCanvas.toBlob((blob) => {
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = 'captured_photo.png';
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-        }, 'image/png');
-      });
-
-      // 10-sec video capture
-      let mediaRecorder;
-      let recordedChunks = [];
-      recordVideoBtn.addEventListener('click', () => {
-        if (!navigator.mediaDevices || !window.MediaRecorder) {
-          alert("MediaRecorder not supported.");
-          return;
-        }
-        recordedChunks = [];
-        const stream = videoElement.srcObject;
-        if (!stream) {
-          alert("No camera stream found.");
-          return;
-        }
-        try {
-          mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
-        } catch (e) {
-          console.error("MediaRecorder error:", e);
-          alert("Error creating MediaRecorder: " + e);
-          return;
-        }
-        mediaRecorder.ondataavailable = (evt) => {
-          if (evt.data && evt.data.size > 0) {
-            recordedChunks.push(evt.data);
-          }
-        };
-        mediaRecorder.onstop = () => {
-          const blob = new Blob(recordedChunks, { type: 'video/webm' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = 'captured_video.webm';
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-        };
-        mediaRecorder.start();
-        setTimeout(() => {
-          if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-            mediaRecorder.stop();
-          }
-        }, 10000);
-      });
-    </script>
-  </body>
+      rec.start();
+      setTimeout(()=>rec.stop(),10000);
+    };
+  })();
+  </script>
+</body>
 </html>
