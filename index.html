@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Fixed Frame Capture</title>
   <style>
     body {
@@ -12,33 +12,43 @@
       font-family: Arial, sans-serif;
       background: #f0f0f0;
     }
+
     #main-layout {
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
     }
+
+    /* Container for our 9:16 canvas, but we constrain both width and height to viewport */
     #canvas-container {
       position: relative;
       width: 100%;
-      max-width: 720px;
+      max-width: 90vw;
+      max-height: 90vh;
+      aspect-ratio: 9 / 16;
+      background: #000;
     }
+
+    /* Canvas displays at native 720×1280 ratio, scaled to container without distortion */
     #displayCanvas {
       width: 100%;
-      height: auto;
-      max-height: 90vh;       /* Ensure it never exceeds 90% of viewport height on large screens */
-      background: #000;
+      height: 100%;
+      object-fit: contain;
       display: block;
     }
+
     .btns {
       margin-top: 10px;
       display: flex;
       gap: 10px;
     }
+
     button {
       padding: 10px 20px;
       font-size: 1em;
     }
+
     @media (min-width: 900px) {
       #main-layout {
         flex-direction: row;
@@ -59,7 +69,7 @@
 </head>
 <body>
   <h1>Fixed Frame Capture</h1>
-  <p>Ensure your full body is inside the box. Green = valid, red = outside.</p>
+  <p>Ensure your full body is inside the box (green = in frame, red = out).</p>
 
   <div id="main-layout">
     <div id="canvas-container">
@@ -108,18 +118,17 @@
       let nosePos = null;
       faceMesh.onResults(results => {
         if (results.multiFaceLandmarks && results.multiFaceLandmarks[0]) {
-          const nose = results.multiFaceLandmarks[0][1];
-          nosePos = {
-            x: nose.x * canvas.width,
-            y: nose.y * canvas.height
-          };
+          const n = results.multiFaceLandmarks[0][1];
+          nosePos = { x: n.x * canvas.width, y: n.y * canvas.height };
         } else {
           nosePos = null;
         }
       });
 
       const F = { minX: 0.1, maxX: 0.9, minY: 0.1, maxY: 0.9 };
-      const drawBox = (valid) => {
+      const drawBox = valid => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(videoElement, 0, 0); /* Ensure frame is cleared */
         ctx.strokeStyle = valid ? 'green' : 'red';
         ctx.lineWidth = 6;
         ctx.strokeRect(
@@ -143,7 +152,7 @@
         drawVideoCover();
         await faceMesh.send({ image: canvas });
 
-        const valid = !!nosePos &&
+        const valid = nosePos &&
           nosePos.x >= F.minX * canvas.width &&
           nosePos.x <= F.maxX * canvas.width &&
           nosePos.y >= F.minY * canvas.height &&
@@ -160,17 +169,13 @@
           a.href = URL.createObjectURL(blob);
           a.download = 'photo.png';
           a.click();
-        });
+        }, 'image/png');
       };
 
       btnVideo.onclick = () => {
         const recorder = new MediaRecorder(canvas.captureStream(30), { mimeType: 'video/webm' });
         let chunks = [];
-
-        recorder.ondataavailable = (e) => {
-          if (e.data.size > 0) chunks.push(e.data);
-        };
-
+        recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
         recorder.onstop = () => {
           const blob = new Blob(chunks, { type: 'video/webm' });
           const a = document.createElement('a');
@@ -178,7 +183,6 @@
           a.download = 'video.webm';
           a.click();
         };
-
         recorder.start();
         setTimeout(() => recorder.stop(), 10000);
       };
