@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <title>Responsive Fixed Frame</title>
+  <title>Fixed Frame Capture</title>
   <style>
     body {
       margin: 0;
@@ -12,44 +12,32 @@
       font-family: Arial, sans-serif;
       background: #f0f0f0;
     }
-
-    h1 { margin-bottom: 0; }
-    p { margin-top: 5px; }
-
     #main-layout {
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
     }
-
     #canvas-container {
       position: relative;
       width: 100%;
       max-width: 720px;
     }
-
     #displayCanvas {
       width: 100%;
       height: auto;
       background: #000;
       display: block;
     }
-
     .btns {
       margin-top: 10px;
       display: flex;
       gap: 10px;
     }
-
     button {
       padding: 10px 20px;
       font-size: 1em;
     }
-
-    /* --------------------------
-       Desktop view: buttons to right
-    -------------------------- */
     @media (min-width: 900px) {
       #main-layout {
         flex-direction: row;
@@ -57,16 +45,10 @@
         justify-content: center;
         gap: 30px;
       }
-
-      #canvas-container {
-        flex: 0 0 auto;
-      }
-
       .btns {
         flex-direction: column;
         margin-top: 0;
       }
-
       button {
         padding: 12px 18px;
         font-size: 1.1em;
@@ -75,8 +57,8 @@
   </style>
 </head>
 <body>
-  <h1>Responsive Fixed Frame Capture</h1>
-  <p>Please ensure you are fully within the frame. (Green = good, red = out.)</p>
+  <h1>Fixed Frame Capture</h1>
+  <p>Ensure your full body is inside the box. Green = valid, red = outside.</p>
 
   <div id="main-layout">
     <div id="canvas-container">
@@ -89,7 +71,117 @@
     </div>
   </div>
 
-  <!-- You can now keep your existing script here -->
-  <!-- (Same capture / drawing / recording logic you already have) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', async () => {
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      const video = document.getElementById('hiddenVideo');
+      const canvas = document.getElementById('displayCanvas');
+      const ctx = canvas.getContext('2d');
+      const btnPhoto = document.getElementById('capturePhoto');
+      const btnVideo = document.getElementById('recordVideo');
+
+      let stream = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: isMobile ? { exact: 'environment' } : 'user' },
+          audio: false
+        });
+        video.srcObject = stream;
+        await video.play();
+      } catch (err) {
+        alert("Camera access failed: " + err.message);
+        return;
+      }
+
+      const faceMesh = new FaceMesh({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+      });
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+
+      let nosePos = null;
+      faceMesh.onResults(results => {
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks[0]) {
+          const nose = results.multiFaceLandmarks[0][1];
+          nosePos = {
+            x: nose.x * canvas.width,
+            y: nose.y * canvas.height
+          };
+        } else {
+          nosePos = null;
+        }
+      });
+
+      const F = { minX: 0.1, maxX: 0.9, minY: 0.1, maxY: 0.9 };
+      const drawBox = (valid) => {
+        ctx.strokeStyle = valid ? 'green' : 'red';
+        ctx.lineWidth = 6;
+        ctx.strokeRect(
+          F.minX * canvas.width,
+          F.minY * canvas.height,
+          (F.maxX - F.minX) * canvas.width,
+          (F.maxY - F.minY) * canvas.height
+        );
+      };
+
+      function drawVideoCover() {
+        const vw = video.videoWidth, vh = video.videoHeight;
+        const cw = canvas.width, ch = canvas.height;
+        const scale = Math.max(cw / vw, ch / vh);
+        const sw = cw / scale, sh = ch / scale;
+        const sx = (vw - sw) / 2, sy = (vh - sh) / 2;
+        ctx.drawImage(video, sx, sy, sw, sh, 0, 0, cw, ch);
+      }
+
+      async function loop() {
+        drawVideoCover();
+        await faceMesh.send({ image: canvas });
+
+        const valid = !!nosePos &&
+          nosePos.x >= F.minX * canvas.width &&
+          nosePos.x <= F.maxX * canvas.width &&
+          nosePos.y >= F.minY * canvas.height &&
+          nosePos.y <= F.maxY * canvas.height;
+
+        drawBox(valid);
+        requestAnimationFrame(loop);
+      }
+      loop();
+
+      btnPhoto.onclick = () => {
+        canvas.toBlob(blob => {
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'photo.png';
+          a.click();
+        });
+      };
+
+      btnVideo.onclick = () => {
+        const recorder = new MediaRecorder(canvas.captureStream(30), { mimeType: 'video/webm' });
+        let chunks = [];
+
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) chunks.push(e.data);
+        };
+
+        recorder.onstop = () => {
+          const blob = new Blob(chunks, { type: 'video/webm' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'video.webm';
+          a.click();
+        };
+
+        recorder.start();
+        setTimeout(() => recorder.stop(), 10000);
+      };
+    });
+  </script>
 </body>
 </html>
