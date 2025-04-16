@@ -19,19 +19,19 @@
       justify-content: center;
       gap: 20px;
     }
-    /* Container with max width and height for viewport */
+    /* Container sized by viewport height to show full rectangle without scrolling */
     #canvas-container {
       position: relative;
-      width: 100%;
-      max-width: 720px;
-      /* Remove forced aspect-ratio; canvas will maintain via CSS on itself */
-    }
-    /* Canvas: maintain 9:16 ratio, scale to fit container without distortion */
-    #displayCanvas {
-      width: 100%;
-      aspect-ratio: 9 / 16;
-      max-height: 90vh;
+      height: 90vh;                   /* 90% of viewport height */
+      width: auto;
+      max-width: calc(90vh * 9 / 16);  /* maintain 9:16 aspect ratio */
+      margin: 0 auto;
       background: #000;
+    }
+    /* Canvas fills container, preserving its 9:16 ratio */
+    #displayCanvas {
+      height: 100%;
+      width: 100%;
       display: block;
     }
     .btns {
@@ -117,36 +117,56 @@
       function drawBox(valid) {
         ctx.strokeStyle = valid ? 'green' : 'red';
         ctx.lineWidth = 6;
-        ctx.strokeRect(F.minX*canvas.width, F.minY*canvas.height,
-                       (F.maxX-F.minX)*canvas.width, (F.maxY-F.minY)*canvas.height);
+        ctx.strokeRect(
+          F.minX * canvas.width,
+          F.minY * canvas.height,
+          (F.maxX - F.minX) * canvas.width,
+          (F.maxY - F.minY) * canvas.height
+        );
       }
 
       function drawVideoCover() {
-        const vw=video.videoWidth, vh=video.videoHeight;
-        const cw=canvas.width, ch=canvas.height;
-        const scale = Math.max(cw/vw, ch/vh);
-        const sw=cw/scale, sh=ch/scale;
-        const sx=(vw-sw)/2, sy=(vh-sh)/2;
-        ctx.drawImage(video, sx, sy, sw, sh, 0,0, cw,ch);
+        const vw = video.videoWidth, vh = video.videoHeight;
+        const cw = canvas.width, ch = canvas.height;
+        const scale = Math.max(cw / vw, ch / vh);
+        const sw = cw / scale, sh = ch / scale;
+        const sx = (vw - sw) / 2, sy = (vh - sh) / 2;
+        ctx.drawImage(video, sx, sy, sw, sh, 0, 0, cw, ch);
       }
 
       async function loop() {
         drawVideoCover();
         await faceMesh.send({ image: video });
-        const valid = nosePos && nosePos.x>=F.minX*canvas.width && nosePos.x<=F.maxX*canvas.width
-                          && nosePos.y>=F.minY*canvas.height && nosePos.y<=F.maxY*canvas.height;
+        const valid = nosePos
+          && nosePos.x >= F.minX * canvas.width
+          && nosePos.x <= F.maxX * canvas.width
+          && nosePos.y >= F.minY * canvas.height
+          && nosePos.y <= F.maxY * canvas.height;
         drawBox(valid);
         requestAnimationFrame(loop);
       }
       loop();
 
-      btnPhoto.onclick = () => canvas.toBlob(b=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='photo.png'; a.click(); }, 'image/png');
+      btnPhoto.onclick = () => canvas.toBlob(b => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(b);
+        a.download = 'photo.png';
+        a.click();
+      }, 'image/png');
+
       btnVideo.onclick = () => {
-        const recorder=new MediaRecorder(canvas.captureStream(30), {mimeType:'video/webm'});
-        let chunks=[];
-        recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
-        recorder.onstop=()=>{const blob=new Blob(chunks,{type:'video/webm'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='video.webm'; a.click(); };
-        recorder.start(); setTimeout(()=>recorder.stop(),10000);
+        const recorder = new MediaRecorder(canvas.captureStream(30), { mimeType:'video/webm' });
+        let chunks = [];
+        recorder.ondataavailable = e => { if(e.data.size) chunks.push(e.data); };
+        recorder.onstop = () => {
+          const blob = new Blob(chunks, { type:'video/webm' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'video.webm';
+          a.click();
+        };
+        recorder.start();
+        setTimeout(() => recorder.stop(), 10000);
       };
     });
   </script>
