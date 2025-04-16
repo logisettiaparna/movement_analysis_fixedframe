@@ -12,53 +12,48 @@
       font-family: Arial, sans-serif;
       background: #f0f0f0;
     }
-
     #main-layout {
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
+      gap: 20px;
     }
-
-    /* Container for our 9:16 canvas, but we constrain both width and height to viewport */
+    /* Container with max width and height for viewport */
     #canvas-container {
       position: relative;
       width: 100%;
-      max-width: 90vw;
-      max-height: 90vh;
-      aspect-ratio: 9 / 16;
-      background: #000;
+      max-width: 720px;
+      /* Remove forced aspect-ratio; canvas will maintain via CSS on itself */
     }
-
-    /* Canvas displays at native 720×1280 ratio, scaled to container without distortion */
+    /* Canvas: maintain 9:16 ratio, scale to fit container without distortion */
     #displayCanvas {
       width: 100%;
-      height: 100%;
-      object-fit: contain;
+      aspect-ratio: 9 / 16;
+      max-height: 90vh;
+      background: #000;
       display: block;
     }
-
     .btns {
-      margin-top: 10px;
       display: flex;
+      flex-wrap: wrap;
       gap: 10px;
+      justify-content: center;
     }
-
     button {
       padding: 10px 20px;
       font-size: 1em;
     }
-
     @media (min-width: 900px) {
       #main-layout {
         flex-direction: row;
         align-items: center;
         justify-content: center;
-        gap: 30px;
       }
       .btns {
         flex-direction: column;
-        margin-top: 0;
+        align-items: flex-start;
+        margin-left: 20px;
       }
       button {
         padding: 12px 18px;
@@ -92,7 +87,7 @@
       const btnPhoto = document.getElementById('capturePhoto');
       const btnVideo = document.getElementById('recordVideo');
 
-      let stream = null;
+      let stream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: isMobile ? { exact: 'environment' } : 'user' },
@@ -101,19 +96,12 @@
         video.srcObject = stream;
         await video.play();
       } catch (err) {
-        alert("Camera access failed: " + err.message);
+        alert('Camera access failed: ' + err.message);
         return;
       }
 
-      const faceMesh = new FaceMesh({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-      });
-      faceMesh.setOptions({
-        maxNumFaces: 1,
-        refineLandmarks: true,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
+      const faceMesh = new FaceMesh({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+      faceMesh.setOptions({ maxNumFaces:1, refineLandmarks:true, minDetectionConfidence:0.5, minTrackingConfidence:0.5 });
 
       let nosePos = null;
       faceMesh.onResults(results => {
@@ -125,66 +113,40 @@
         }
       });
 
-      const F = { minX: 0.1, maxX: 0.9, minY: 0.1, maxY: 0.9 };
-      const drawBox = valid => {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(videoElement, 0, 0); /* Ensure frame is cleared */
+      const F = { minX:0.1, maxX:0.9, minY:0.1, maxY:0.9 };
+      function drawBox(valid) {
         ctx.strokeStyle = valid ? 'green' : 'red';
         ctx.lineWidth = 6;
-        ctx.strokeRect(
-          F.minX * canvas.width,
-          F.minY * canvas.height,
-          (F.maxX - F.minX) * canvas.width,
-          (F.maxY - F.minY) * canvas.height
-        );
-      };
+        ctx.strokeRect(F.minX*canvas.width, F.minY*canvas.height,
+                       (F.maxX-F.minX)*canvas.width, (F.maxY-F.minY)*canvas.height);
+      }
 
       function drawVideoCover() {
-        const vw = video.videoWidth, vh = video.videoHeight;
-        const cw = canvas.width, ch = canvas.height;
-        const scale = Math.max(cw / vw, ch / vh);
-        const sw = cw / scale, sh = ch / scale;
-        const sx = (vw - sw) / 2, sy = (vh - sh) / 2;
-        ctx.drawImage(video, sx, sy, sw, sh, 0, 0, cw, ch);
+        const vw=video.videoWidth, vh=video.videoHeight;
+        const cw=canvas.width, ch=canvas.height;
+        const scale = Math.max(cw/vw, ch/vh);
+        const sw=cw/scale, sh=ch/scale;
+        const sx=(vw-sw)/2, sy=(vh-sh)/2;
+        ctx.drawImage(video, sx, sy, sw, sh, 0,0, cw,ch);
       }
 
       async function loop() {
         drawVideoCover();
-        await faceMesh.send({ image: canvas });
-
-        const valid = nosePos &&
-          nosePos.x >= F.minX * canvas.width &&
-          nosePos.x <= F.maxX * canvas.width &&
-          nosePos.y >= F.minY * canvas.height &&
-          nosePos.y <= F.maxY * canvas.height;
-
+        await faceMesh.send({ image: video });
+        const valid = nosePos && nosePos.x>=F.minX*canvas.width && nosePos.x<=F.maxX*canvas.width
+                          && nosePos.y>=F.minY*canvas.height && nosePos.y<=F.maxY*canvas.height;
         drawBox(valid);
         requestAnimationFrame(loop);
       }
       loop();
 
-      btnPhoto.onclick = () => {
-        canvas.toBlob(blob => {
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = 'photo.png';
-          a.click();
-        }, 'image/png');
-      };
-
+      btnPhoto.onclick = () => canvas.toBlob(b=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='photo.png'; a.click(); }, 'image/png');
       btnVideo.onclick = () => {
-        const recorder = new MediaRecorder(canvas.captureStream(30), { mimeType: 'video/webm' });
-        let chunks = [];
-        recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-        recorder.onstop = () => {
-          const blob = new Blob(chunks, { type: 'video/webm' });
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = 'video.webm';
-          a.click();
-        };
-        recorder.start();
-        setTimeout(() => recorder.stop(), 10000);
+        const recorder=new MediaRecorder(canvas.captureStream(30), {mimeType:'video/webm'});
+        let chunks=[];
+        recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
+        recorder.onstop=()=>{const blob=new Blob(chunks,{type:'video/webm'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='video.webm'; a.click(); };
+        recorder.start(); setTimeout(()=>recorder.stop(),10000);
       };
     });
   </script>
