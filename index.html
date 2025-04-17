@@ -1,184 +1,146 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Fixed‐Frame Full‑Body Capture (High‑Res)</title>
+  <meta charset="UTF-8">
+  <title>8‑Head Fixed‑Frame Capture</title>
   <style>
-    body { margin:0; padding:10px; text-align:center; font-family:Arial,sans-serif; background:#f0f0f0; }
-    h1 { margin-bottom:4px; }
-    p  { margin-top:0; color:#333; }
-    #layout { display:flex; flex-direction:column; align-items:center; gap:16px; }
-    #canvas-wrap {
-      position:relative;
-      height:90vh;
-      max-width:calc(90vh * 9/16);
-      background:#000;
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      text-align: center;
+      background: #f0f0f0;
+      color: #333;
     }
-    #displayCanvas { width:100%; height:100%; display:block; }
-    #captureCanvas { display:none; }
-    .btns { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
-    button { padding:10px 20px; font-size:1em; cursor:pointer; }
-    button:disabled { opacity:0.5; cursor:not-allowed; }
+    h1 { margin: 1rem 0 0.5rem; }
+    #instructions { margin-bottom: 1rem; }
+    #camera-container {
+      position: relative;
+      display: inline-block;
+      background: #000;
+      /* we'll size this to the video dimensions in JS */
+    }
+    video {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+    canvas#overlay {
+      position: absolute;
+      top: 0; left: 0;
+      pointer-events: none;
+    }
+    #controls {
+      margin: 1rem 0;
+    }
+    button {
+      font-size: 1rem;
+      padding: 0.5rem 1rem;
+      margin: 0 0.5rem;
+    }
     #countdown {
-      position:absolute; top:50%; left:50%; transform:translate(-50%, -50%);
-      font-size:5em; color:yellow; text-shadow:0 0 10px black;
-      pointer-events:none;
-    }
-    @media(min-width:900px) {
-      #layout { flex-direction:row; align-items:flex-start; }
-      .btns  { flex-direction:column; margin-left:20px; }
+      font-size: 2rem;
+      font-weight: bold;
+      color: #d00;
+      height: 2rem;
     }
   </style>
 </head>
 <body>
-  <h1>Fixed‐Frame Full‑Body Capture (High‑Res)</h1>
-  <p>Center your entire body inside the box. Hold green for 1 sec, then snap or record.</p>
+  <h1>8‑Head Fixed‑Frame Capture</h1>
+  <p id="instructions">
+    Position your <strong>entire body</strong> inside the box.  
+    When ready, click “Capture” and hold still for the countdown.
+  </p>
 
-  <div id="layout">
-    <div id="canvas-wrap">
-      <video id="hiddenVideo" playsinline autoplay muted style="display:none;"></video>
-      <canvas id="displayCanvas" width="720" height="1280"></canvas>
-      <canvas id="captureCanvas"></canvas>
-      <div id="countdown"></div>
-    </div>
-    <div class="btns">
-      <button id="switchCam">🔄 Switch Camera</button>
-      <button id="snap" disabled>📸 Snap (5s)</button>
-      <button id="rec" disabled>🎥 Record (5s)</button>
-    </div>
+  <div id="camera-container">
+    <video id="video" autoplay playsinline></video>
+    <canvas id="overlay"></canvas>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js"></script>
+  <div id="controls">
+    <button id="capture-btn">📸 Capture Photo</button>
+    <div id="countdown"></div>
+  </div>
+
   <script>
-  (async()=>{
-    const vid = document.getElementById('hiddenVideo');
-    const dispC = document.getElementById('displayCanvas'), dispCtx = dispC.getContext('2d');
-    const capC  = document.getElementById('captureCanvas'), capCtx = capC.getContext('2d');
-    const switchBtn = document.getElementById('switchCam');
-    const snapBtn   = document.getElementById('snap');
-    const recBtn    = document.getElementById('rec');
-    const cdEl      = document.getElementById('countdown');
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const ctx = overlay.getContext('2d');
+    const btn = document.getElementById('capture-btn');
+    const cd = document.getElementById('countdown');
 
-    let facing = 'user';
+    // 1) grab camera
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user' },
+      audio: false
+    }).then(stream => {
+      video.srcObject = stream;
+      video.addEventListener('loadedmetadata', () => {
+        // size container + overlay to match actual video resolution
+        const W = video.videoWidth;
+        const H = video.videoHeight;
+        const container = document.getElementById('camera-container');
+        container.style.width  = W + 'px';
+        container.style.height = H + 'px';
+        overlay.width  = W;
+        overlay.height = H;
 
-    async function startCamera(){
-      if(vid.srcObject) vid.srcObject.getTracks().forEach(t=>t.stop());
-      try{
-        // Ask for higher resolution but allow fallback
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: facing,
-            width:  { ideal: 1920 },
-            height: { ideal: 1080 },
-            aspectRatio: 9/16
-          },
-          audio: false
-        });
-        vid.srcObject = stream;
-        await vid.play();
-        // Dynamically size capture canvas to actual video feed resolution
-        capC.width  = vid.videoWidth;
-        capC.height = vid.videoHeight;
-      } catch(e){ alert('Camera error: '+e.message); }
+        drawOverlay();
+      });
+    }).catch(err => {
+      alert('Could not access camera:\n' + err);
+    });
+
+    // 2) draw the fixed‑frame box (full height, 80% width, centered)
+    function drawOverlay() {
+      const W = overlay.width, H = overlay.height;
+      ctx.clearRect(0,0,W,H);
+      const boxW = W * 0.8;
+      const boxH = H;
+      const x0   = (W - boxW)/2;
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = 'lime';  // always green
+      ctx.strokeRect(x0, 0, boxW, boxH);
     }
 
-    switchBtn.onclick = ()=>{ facing = facing==='user'?'environment':'user'; startCamera(); };
-    await startCamera();
-
-    // Selfie segmentation
-    const seg = new SelfieSegmentation({ locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}` });
-    seg.setOptions({ modelSelection:1 });
-    let segMask = null;
-    seg.onResults(r=> segMask = r.segmentationMask);
-
-    const cw = dispC.width, ch = dispC.height;
-    const F = {minX:0.1, maxX:0.9, minY:0.1, maxY:0.9};
-    const left=F.minX*cw, right=F.maxX*cw, top=F.minY*ch, bottom=F.maxY*ch;
-
-    function checkOutside(){
-      if(!segMask) return true;
-      capCtx.clearRect(0,0,cw,ch);
-      capCtx.drawImage(segMask,0,0,cw,ch);
-      const data = capCtx.getImageData(0,0,cw,ch).data;
-      for(let y=0; y<ch; y+=10){
-        for(let x=0; x<cw; x+=10){
-          if(x<left||x>right||y<top||y>bottom){
-            const i=(y*cw+x)*4;
-            if(data[i+1] > 128) return true;
-          }
+    // 3) capture on button click with a 3 second countdown
+    btn.addEventListener('click', () => {
+      let count = 3;
+      cd.textContent = count;
+      const timer = setInterval(() => {
+        count -= 1;
+        if (count > 0) {
+          cd.textContent = count;
+        } else {
+          clearInterval(timer);
+          cd.textContent = '';
+          doCapture();
         }
-      }
-      return false;
-    }
-
-    let validStart = null;
-    async function loop(){
-      // Draw video to displayCanvas (cover)
-      const vw=vid.videoWidth, vh=vid.videoHeight;
-      const s = Math.max(cw/vw, ch/vh);
-      const sw = cw/s, sh = ch/s;
-      const sx = (vw-sw)/2, sy=(vh-sh)/2;
-      dispCtx.drawImage(vid, sx,sy, sw,sh, 0,0, cw,ch);
-
-      await seg.send({ image: dispC });
-      const outside = checkOutside();
-      dispCtx.lineWidth = 6;
-      dispCtx.strokeStyle = outside?'red':'lime';
-      dispCtx.strokeRect(left, top, right-left, bottom-top);
-
-      const now = performance.now();
-      if(!outside){
-        validStart = validStart || now;
-        if(now - validStart > 1000){ snapBtn.disabled = false; recBtn.disabled = false; }
-      } else {
-        validStart = null;
-        snapBtn.disabled = recBtn.disabled = true;
-      }
-
-      requestAnimationFrame(loop);
-    }
-    loop();
-
-    function runCountdown(sec, cb){
-      cdEl.textContent = '';
-      snapBtn.disabled = recBtn.disabled = true;
-      let t = sec;
-      const iv = setInterval(()=>{
-        cdEl.textContent = t>0? t : '';
-        if(t-- <= 0){ clearInterval(iv); cb(); cdEl.textContent = ''; }
       }, 1000);
+    });
+
+    // 4) actually grab the frame and download as PNG
+    function doCapture() {
+      const W = video.videoWidth;
+      const H = video.videoHeight;
+      const capture = document.createElement('canvas');
+      capture.width  = W;
+      capture.height = H;
+      const cctx = capture.getContext('2d');
+      // draw the raw video frame—no resizing
+      cctx.drawImage(video, 0, 0, W, H);
+      // and download
+      capture.toBlob(blob => {
+        const url = URL.createObjectURL(blob);
+        const a   = document.createElement('a');
+        a.href    = url;
+        a.download= 'aramandi.png';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }, 'image/png');
     }
-
-    snapBtn.onclick = ()=>{
-      runCountdown(5, ()=>{
-        capCtx.drawImage(vid, 0,0);
-        capC.toBlob(b=>{
-          const a=document.createElement('a');
-          a.href = URL.createObjectURL(b);
-          a.download = `photo_${facing}_${capC.width}x${capC.height}.png`;
-          a.click();
-        }, 'image/png');
-      });
-    };
-
-    recBtn.onclick = ()=>{
-      runCountdown(5, ()=>{
-        const recorder = new MediaRecorder(capC.captureStream(30), { mimeType:'video/webm' });
-        let parts = [];
-        recorder.ondataavailable = e=>{ if(e.data.size) parts.push(e.data); };
-        recorder.onstop = ()=>{
-          const blob=new Blob(parts,{type:'video/webm'});
-          const a=document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = `video_${facing}_${capC.width}x${capC.height}.webm`;
-          a.click();
-        };
-        recorder.start();
-        setTimeout(()=>recorder.stop(),10_000);
-      });
-    };
-  })();
   </script>
 </body>
 </html>
