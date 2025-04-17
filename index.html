@@ -3,18 +3,16 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Fixed‐Frame Full‐Body Capture</title>
+  <title>Fixed‐Frame Full‑Body Capture (High‑Res)</title>
   <style>
     body { margin:0; padding:10px; text-align:center; font-family:Arial,sans-serif; background:#f0f0f0; }
     h1 { margin-bottom:4px; }
     p  { margin-top:0; color:#333; }
-    #layout {
-      display:flex; flex-direction:column; align-items:center; gap:16px;
-    }
+    #layout { display:flex; flex-direction:column; align-items:center; gap:16px; }
     #canvas-wrap {
       position:relative;
       height:90vh;
-      max-width: calc(90vh * 9/16);
+      max-width:calc(90vh * 9/16);
       background:#000;
     }
     #displayCanvas { width:100%; height:100%; display:block; }
@@ -34,14 +32,14 @@
   </style>
 </head>
 <body>
-  <h1>Fixed‐Frame Full‐Body Capture</h1>
-  <p>Center yourself & keep your entire body inside the box until it turns green for 1 sec.</p>
+  <h1>Fixed‐Frame Full‑Body Capture (High‑Res)</h1>
+  <p>Center yourself & keep your entire body inside the box. Hold 1 sec for green then snap/record.</p>
 
   <div id="layout">
     <div id="canvas-wrap">
       <video id="hiddenVideo" playsinline autoplay muted style="display:none;"></video>
       <canvas id="displayCanvas" width="720" height="1280"></canvas>
-      <canvas id="captureCanvas" width="720" height="1280"></canvas>
+      <canvas id="captureCanvas"></canvas>
       <div id="countdown"></div>
     </div>
     <div class="btns">
@@ -56,37 +54,37 @@
   (async()=>{
     const vid = document.getElementById('hiddenVideo');
     const dispC = document.getElementById('displayCanvas'); const dispCtx=dispC.getContext('2d');
-    const capC  = document.getElementById('captureCanvas'); const capCtx = capC.getContext('2d');
+    const capC  = document.getElementById('captureCanvas'); const capCtx=capC.getContext('2d');
     const switchBtn = document.getElementById('switchCam');
     const snapBtn = document.getElementById('snap');
     const recBtn  = document.getElementById('rec');
     const cdEl    = document.getElementById('countdown');
 
     let facing = 'user';
-    // Initialize camera
+
     async function startCamera(){
       if(vid.srcObject){ vid.srcObject.getTracks().forEach(t=>t.stop()); }
-      try {
+      try{
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width:720, height:1280, facingMode:facing }, audio:false
+          video:{ facingMode: facing, ideal:{width:1920, height:1080} },
+          audio:false
         });
         vid.srcObject = stream;
         await vid.play();
-      } catch(e){ alert('Camera error: '+e.message); }
+        // resize capture canvas to actual video size
+        capC.width  = vid.videoWidth;
+        capC.height = vid.videoHeight;
+      }catch(e){ alert('Camera error: '+e.message); }
     }
-    switchBtn.onclick = async ()=>{
-      facing = (facing==='user'?'environment':'user');
-      await startCamera();
-    };
+    switchBtn.onclick = ()=>{ facing = (facing==='user'?'environment':'user'); startCamera(); };
     await startCamera();
 
-    // Selfie segmentation
     const seg = new SelfieSegmentation({ locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}` });
     seg.setOptions({ modelSelection:1 });
     let segMask = null;
-    seg.onResults(r=>segMask=r.segmentationMask);
+    seg.onResults(r=>segMask = r.segmentationMask);
 
-    const cw=dispC.width, ch=dispC.height;
+    const cw = dispC.width, ch = dispC.height;
     const F={minX:0.1,maxX:0.9,minY:0.1,maxY:0.9};
     const left=F.minX*cw, right=F.maxX*cw, top=F.minY*ch, bottom=F.maxY*ch;
 
@@ -94,18 +92,17 @@
       if(!segMask) return true;
       capCtx.clearRect(0,0,cw,ch);
       capCtx.drawImage(segMask,0,0,cw,ch);
-      const data=capCtx.getImageData(0,0,cw,ch).data;
-      for(let y=0;y<ch;y+=10){ for(let x=0;x<cw;x+=10){
-        if(x<left||x>right||y<top||y>bottom){
-          const i=(y*cw+x)*4;
+      const data = capCtx.getImageData(0,0,cw,ch).data;
+      for(let y=0;y<ch;y+=10) for(let x=0;x<cw;x+=10){
+        if(x<left||x>right||y<top||y>bottom){ const i=(y*cw+x)*4;
           if(data[i+1]>128) return true;
         }
-      }}
+      }
       return false;
     }
 
     let validStart=null;
-    async function drawLoop(){
+    async function loop(){
       // draw video cover
       const vw=vid.videoWidth, vh=vid.videoHeight;
       const s=Math.max(cw/vw, ch/vh);
@@ -119,50 +116,41 @@
       dispCtx.strokeStyle = outside?'red':'lime';
       dispCtx.strokeRect(left,top,right-left,bottom-top);
 
-      const now=performance.now();
-      if(!outside){
-        validStart = validStart||now;
+      const now = performance.now();
+      if(!outside){ validStart = validStart||now;
         if(now-validStart>1000){ snapBtn.disabled=false; recBtn.disabled=false; }
       } else { validStart=null; snapBtn.disabled=recBtn.disabled=true; }
 
-      requestAnimationFrame(drawLoop);
+      requestAnimationFrame(loop);
     }
-    drawLoop();
+    loop();
 
-    // Countdown helper
     function runCountdown(secs, cb){
       cdEl.textContent=''; snapBtn.disabled=recBtn.disabled=true;
       let t=secs;
-      const iv=setInterval(()=>{
-        cdEl.textContent = t;
-        if(--t<0){ clearInterval(iv); cdEl.textContent=''; cb(); }
+      const iv = setInterval(()=>{
+        cdEl.textContent = t>0?t:'';
+        if(t--<=0){ clearInterval(iv); cb(); cdEl.textContent=''; }
       },1000);
     }
 
-    // Snap
     snapBtn.onclick = ()=>{
       runCountdown(5, ()=>{
-        capCtx.drawImage(vid,0,0,vid.videoWidth,vid.videoHeight,0,0,cw,ch);
-        capC.toBlob(b=>{
-          const a=document.createElement('a');
-          a.href=URL.createObjectURL(b);
-          a.download=`photo_${facing}_720x1280.png`;
-          a.click();
-        });
+        capCtx.drawImage(vid,0,0,capC.width,capC.height);
+        capC.toBlob(b=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(b);
+          a.download=`photo_${facing}_${capC.width}x${capC.height}.png`; a.click(); }, 'image/png');
       });
     };
 
-    // Record
     recBtn.onclick = ()=>{
       runCountdown(5, ()=>{
-        const rec=new MediaRecorder(capC.captureStream(30),{mimeType:'video/webm'});
+        const rec = new MediaRecorder(capC.captureStream(30),{mimeType:'video/webm'});
         let parts=[];
-        rec.ondataavailable=e=>{ if(e.data.size) parts.push(e.data); };
-        rec.onstop=()=>{
+        rec.ondataavailable = e=>{ if(e.data.size) parts.push(e.data); };
+        rec.onstop = ()=>{
           const blob=new Blob(parts,{type:'video/webm'});
-          const a=document.createElement('a');
-          a.href=URL.createObjectURL(blob);
-          a.download=`video_${facing}_720x1280.webm`;
+          const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+          a.download=`video_${facing}_${capC.width}x${capC.height}.webm`;
           a.click();
         };
         rec.start(); setTimeout(()=>rec.stop(),10000);
