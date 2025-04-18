@@ -3,191 +3,230 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Smart Auto‑Crop Aramandi</title>
+  <title>Fixed‑Frame Aramandi Capture</title>
   <style>
     body {
-      margin:0;
-      padding:1rem;
+      margin:0; padding:1rem;
       font-family:sans-serif;
-      text-align:center;
       background:#fafafa;
+      color:#333;
+    }
+    h1 { text-align:center; }
+    .layout {
+      display:flex;
+      flex-wrap:wrap;
+      justify-content:center;
+      align-items:flex-start;
+      gap:1rem;
     }
     #camera-container {
       position:relative;
+      /* 9:16 frame */
       width:100%;
       max-width:480px;
-      margin:0 auto;
-      /* enforce a 9:16 box */
       aspect-ratio:9/16;
       background:#000;
       overflow:hidden;
     }
-    /* video hidden, we draw into canvas */
-    #video { display:none; }
-    #output {
-      /* fill container, but preserve canvas aspect-ratio */
-      width:100%;
-      height:100%;
+    #video {
+      width:100%; height:100%;
       object-fit:cover;
+    }
+    #overlay {
+      position:absolute;
+      top:0; left:0;
+      width:100%; height:100%;
+      pointer-events:none;
+    }
+    .controls {
+      display:flex;
+      flex-direction:column;
+      gap:0.5rem;
+      width:100%;
+      max-width:200px;
+    }
+    @media(min-width:720px){
+      .controls { margin-left:1rem; }
+      .controls { align-self:center; }
+    }
+    button {
+      padding:0.6rem;
+      font-size:1rem;
+      cursor:pointer;
     }
     #countdown {
       position:absolute;
       top:50%; left:50%;
       transform:translate(-50%,-50%);
-      font-size:3rem;
+      font-size:2.5rem;
       color:#fff;
       text-shadow:0 0 8px #000;
       pointer-events:none;
     }
-    .controls {
-      display:flex;
-      justify-content:center;
-      gap:0.5rem;
-      margin-top:1rem;
-      flex-wrap:wrap;
-    }
-    button {
-      flex:1 1 120px;
-      padding:0.6rem 1.2rem;
-      font-size:1rem;
-      cursor:pointer;
-    }
   </style>
 </head>
 <body>
-  <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Get your full‑body in view, then tap “Capture.”</p>
-  <div id="camera-container">
-    <video id="video" autoplay playsinline muted></video>
-    <canvas id="output"></canvas>
-    <div id="countdown"></div>
-  </div>
-  <div class="controls">
-    <button id="photo">📸 Capture Photo</button>
-    <button id="record">🎥 Record 10 s Video</button>
+  <h1>Fixed‑Frame Aramandi Capture</h1>
+  <p style="text-align:center;">
+    Position your <strong>entire</strong> body inside the box. It turns green when fully in‑frame.
+  </p>
+
+  <div class="layout">
+    <div id="camera-container">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div id="countdown"></div>
+    </div>
+    <div class="controls">
+      <button id="photo">📸 Capture Photo</button>
+      <button id="record">🎥 Record 10 s Video</button>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
   <script>
-    const video  = document.getElementById('video');
-    const canvas = document.getElementById('output');
-    const ctx    = canvas.getContext('2d');
-    const cd     = document.getElementById('countdown');
-    const btnP   = document.getElementById('photo');
-    const btnV   = document.getElementById('record');
+  (async()=>{
 
-    let vw, vh, lastLM, recorder, chunks;
+    const video   = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const ctx     = overlay.getContext('2d');
+    const cd      = document.getElementById('countdown');
+    const btnP    = document.getElementById('photo');
+    const btnV    = document.getElementById('record');
 
-    function waitSec(n){
+    let vw, vh, poseLandmarks, mediaRecorder, recordedChunks;
+
+    // 1) Start camera
+    const camera = new Camera(video, {
+      onFrame: async () => { await pose.send({image:video}); },
+      width:1280, height:720, facingMode:'user'
+    });
+    camera.start();
+
+    // 2) Setup MediaPipe Pose
+    const pose = new Pose({
+      locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`
+    });
+    pose.setOptions({
+      modelComplexity:1,
+      smoothLandmarks:true,
+      minDetectionConfidence:0.5,
+      minTrackingConfidence:0.5
+    });
+    pose.onResults(r => {
+      poseLandmarks = r.poseLandmarks;
+      drawOverlay();
+    });
+
+    // 3) When video metadata loads, size the overlay canvas
+    video.addEventListener('loadedmetadata',()=>{
+      vw = video.videoWidth;
+      vh = video.videoHeight;
+      overlay.width  = vw;
+      overlay.height = vh;
+    });
+
+    // 4) Draw red/green fixed frame + feedback
+    function drawOverlay(){
+      if(!overlay.width) return;
+      ctx.clearRect(0,0,overlay.width,overlay.height);
+
+      // define a box inset 5% from each edge
+      const Mx = overlay.width*0.05,
+            My = overlay.height*0.05;
+      const x0 = Mx, y0 = My,
+            x1 = overlay.width-Mx,
+            y1 = overlay.height-My;
+
+      // check all landmarks inside
+      let allInside = true;
+      if(poseLandmarks){
+        for(const lm of poseLandmarks){
+          if(lm.visibility<0.3) continue;
+          const x = lm.x*vw, y = lm.y*vh;
+          if(x<x0||x>x1||y<y0||y>y1){
+            allInside = false;
+            break;
+          }
+        }
+      } else {
+        allInside = false;
+      }
+
+      // border
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = allInside ? 'lime' : 'red';
+      ctx.strokeRect(x0,y0, x1-x0, y1-y0);
+    }
+
+    // 5) Countdown helper
+    function countdown(n){
       return new Promise(res=>{
         cd.textContent = n;
         let t=n;
-        const iv=setInterval(()=>{
+        const iv = setInterval(()=>{
           t--;
           cd.textContent = t>0? t:'';
-          if(!t){ clearInterval(iv); res() }
+          if(t<=0){ clearInterval(iv); res(); }
         },1000);
       });
     }
 
-    const pose = new Pose({
-      locateFile: f=>'https://cdn.jsdelivr.net/npm/@mediapipe/pose/'+f
-    });
-    pose.setOptions({
-      modelComplexity:1,
-      minDetectionConfidence:0.5,
-      minTrackingConfidence:0.5
-    });
-    pose.onResults(r=>{
-      lastLM = r.poseLandmarks||lastLM;
-      render();
-    });
-
-    new Camera(video, {
-      onFrame: async ()=> await pose.send({image:video}),
-      width:720, height:1280, facingMode:'user'
-    }).start();
-
-    video.addEventListener('loadedmetadata',()=>{
-      vw=video.videoWidth; vh=video.videoHeight;
-      canvas.width=vw; canvas.height=vh;
-    });
-
-    function render(){
-      if(!lastLM) return;
-      // gather all visible points
-      const xs=[], ys=[];
-      lastLM.forEach(l=>{ if(l.visibility>0.3){
-        xs.push(l.x*vw); ys.push(l.y*vh);
-      }});
-      if(xs.length<5){
-        ctx.drawImage(video,0,0,vw,vh);
-        return;
-      }
-      let minX=Math.max(Math.min(...xs)-50,0),
-          maxX=Math.min(Math.max(...xs)+50,vw),
-          minY=Math.max(Math.min(...ys)-50,0),
-          maxY=Math.min(Math.max(...ys)+50,vh);
-
-      let bw=maxX-minX, bh=maxY-minY;
-      const tgt=vh/vw, cur=bh/bw;
-      let sx=minX, sy=minY, sw=bw, sh=bh;
-
-      if(cur<tgt){
-        // need more height
-        let nh=bw*tgt;
-        sy=Math.max(minY-(nh-bh)/2,0);
-        sh=Math.min(nh,vh-sy);
-      } else {
-        // need more width
-        let nw=bh/tgt;
-        sx=Math.max(minX-(nw-bw)/2,0);
-        sw=Math.min(nw,vw-sx);
-      }
-      ctx.drawImage(video,sx,sy,sw,sh,0,0,vw,vh);
-    }
-
-    btnP.onclick=async ()=>{
-      btnP.disabled=btnV.disabled=true;
-      await waitSec(5);
-      const snap=document.createElement('canvas');
-      snap.width=vw; snap.height=vh;
-      snap.getContext('2d').drawImage(canvas,0,0);
+    // 6) Photo capture
+    btnP.onclick = async ()=>{
+      btnP.disabled = btnV.disabled = true;
+      await countdown(5);
+      // snapshot overlay+video
+      const snap = document.createElement('canvas');
+      snap.width = vw; snap.height = vh;
+      const sctx = snap.getContext('2d');
+      sctx.drawImage(video,0,0,vw,vh);
+      sctx.drawImage(overlay,0,0,vw,vh);
       snap.toBlob(b=>{
-        const a=document.createElement('a');
-        a.href=URL.createObjectURL(b);
-        a.download='aramandi.png';
+        const a = document.createElement('a');
+        a.href        = URL.createObjectURL(b);
+        a.download    = 'aramandi.png';
+        document.body.appendChild(a);
         a.click();
-      });
-      btnP.disabled=btnV.disabled=false;
+        a.remove();
+      },'image/png');
+      btnP.disabled = btnV.disabled = false;
     };
 
-    btnV.onclick=async ()=>{
-      btnP.disabled=btnV.disabled=true;
-      await waitSec(5);
-      chunks=[];
-      try{
-        recorder=new MediaRecorder(canvas.captureStream(),{mimeType:'video/webm'});
-      }catch(e){
-        alert('Recorder not supported');
-        btnP.disabled=btnV.disabled=false;
+    // 7) Video capture
+    btnV.onclick = async ()=>{
+      btnP.disabled = btnV.disabled = true;
+      await countdown(5);
+      recordedChunks = [];
+      try {
+        mediaRecorder = new MediaRecorder(
+          overlay.captureStream(30), 
+          { mimeType:'video/webm; codecs=vp9' }
+        );
+      } catch(e){
+        alert('Recording not supported.');
+        btnP.disabled = btnV.disabled = false;
         return;
       }
-      recorder.ondataavailable=e=>e.data.size&&chunks.push(e.data);
-      recorder.start();
-      setTimeout(()=>{
-        recorder.stop();
-        recorder.onstop=()=>{
-          const blob=new Blob(chunks,{type:'video/webm'});
-          const a=document.createElement('a');
-          a.href=URL.createObjectURL(blob);
-          a.download='aramandi.webm';
-          a.click();
-          btnP.disabled=btnV.disabled=false;
-        };
-      },10000);
+      mediaRecorder.ondataavailable = e=>{
+        if(e.data.size) recordedChunks.push(e.data);
+      };
+      mediaRecorder.onstop = ()=>{
+        const blob = new Blob(recordedChunks, {type:'video/webm'});
+        const a = document.createElement('a');
+        a.href     = URL.createObjectURL(blob);
+        a.download = 'aramandi.webm';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        btnP.disabled = btnV.disabled = false;
+      };
+      mediaRecorder.start();
+      setTimeout(()=> mediaRecorder.stop(), 10000);
     };
+
+  })();
   </script>
 </body>
 </html>
