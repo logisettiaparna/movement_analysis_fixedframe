@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>8‑Head Fixed‑Frame Capture</title>
   <style>
     body {
@@ -12,44 +13,49 @@
       color: #333;
     }
     h1 { margin: 1rem 0 0.5rem; }
-    #instructions { margin-bottom: 1rem; }
+    #instructions { margin-bottom: 1rem; padding: 0 1rem; }
     #camera-container {
       position: relative;
-      display: inline-block;
+      margin: 0 auto;
+      width: 90vw;
+      max-width: 720px;
       background: #000;
-      /* we'll size this to the video dimensions in JS */
     }
-    video {
-      display: block;
+    #camera-container video {
       width: 100%;
       height: auto;
+      display: block;
     }
-    canvas#overlay {
+    #overlay {
       position: absolute;
       top: 0; left: 0;
       pointer-events: none;
     }
     #controls {
       margin: 1rem 0;
+      display: flex;
+      justify-content: center;
+      gap: 1rem;
+      flex-wrap: wrap;
     }
     button {
       font-size: 1rem;
       padding: 0.5rem 1rem;
-      margin: 0 0.5rem;
+      cursor: pointer;
     }
     #countdown {
-      font-size: 2rem;
+      font-size: 1.5rem;
       font-weight: bold;
       color: #d00;
-      height: 2rem;
+      height: 1.5em;
     }
   </style>
 </head>
 <body>
   <h1>8‑Head Fixed‑Frame Capture</h1>
   <p id="instructions">
-    Position your <strong>entire body</strong> inside the box.  
-    When ready, click “Capture” and hold still for the countdown.
+    Position your <strong>entire body</strong> inside the green box.<br>
+    Click “Capture Photo” or “Record Video” and hold still during the countdown.
   </p>
 
   <div id="camera-container">
@@ -58,89 +64,125 @@
   </div>
 
   <div id="controls">
-    <button id="capture-btn">📸 Capture Photo</button>
-    <div id="countdown"></div>
+    <button id="photo-btn">📸 Capture Photo</button>
+    <button id="video-btn">🎥 Record 10 s Video</button>
   </div>
+  <div id="countdown"></div>
 
   <script>
     const video = document.getElementById('video');
     const overlay = document.getElementById('overlay');
     const ctx = overlay.getContext('2d');
-    const btn = document.getElementById('capture-btn');
-    const cd = document.getElementById('countdown');
+    const photoBtn = document.getElementById('photo-btn');
+    const videoBtn = document.getElementById('video-btn');
+    const countdownEl = document.getElementById('countdown');
 
-    // 1) grab camera
+    let mediaRecorder, recordedChunks = [];
+
+    // 1) Open camera (front if available)
     navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'user' },
       audio: false
     }).then(stream => {
       video.srcObject = stream;
       video.addEventListener('loadedmetadata', () => {
-        // size container + overlay to match actual video resolution
-        const W = video.videoWidth;
-        const H = video.videoHeight;
-        const container = document.getElementById('camera-container');
-        container.style.width  = W + 'px';
-        container.style.height = H + 'px';
-        overlay.width  = W;
-        overlay.height = H;
-
-        drawOverlay();
+        fitContainer();
+        drawFrame();
       });
     }).catch(err => {
       alert('Could not access camera:\n' + err);
     });
 
-    // 2) draw the fixed‑frame box (full height, 80% width, centered)
-    function drawOverlay() {
+    // 2) Size container & overlay to match video resolution
+    function fitContainer() {
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const container = document.getElementById('camera-container');
+      // We let CSS handle responsive width; overlay must match video display size:
+      overlay.width  = video.clientWidth;
+      overlay.height = video.clientHeight;
+    }
+
+    window.addEventListener('resize', fitContainer);
+
+    // 3) Draw the 8‑head frame (green border)
+    function drawFrame() {
+      if (!overlay.width) return requestAnimationFrame(drawFrame);
+      ctx.clearRect(0,0,overlay.width,overlay.height);
       const W = overlay.width, H = overlay.height;
-      ctx.clearRect(0,0,W,H);
       const boxW = W * 0.8;
-      const boxH = H;
       const x0   = (W - boxW)/2;
       ctx.lineWidth = 6;
-      ctx.strokeStyle = 'lime';  // always green
-      ctx.strokeRect(x0, 0, boxW, boxH);
+      ctx.strokeStyle = 'lime';
+      ctx.strokeRect(x0, 0, boxW, H);
+      requestAnimationFrame(drawFrame);
     }
 
-    // 3) capture on button click with a 3 second countdown
-    btn.addEventListener('click', () => {
-      let count = 3;
-      cd.textContent = count;
+    // 4) Countdown helper
+    function countdown(seconds, cb) {
+      countdownEl.textContent = seconds;
+      let count = seconds;
       const timer = setInterval(() => {
-        count -= 1;
+        count--;
         if (count > 0) {
-          cd.textContent = count;
+          countdownEl.textContent = count;
         } else {
           clearInterval(timer);
-          cd.textContent = '';
-          doCapture();
+          countdownEl.textContent = '';
+          cb();
         }
       }, 1000);
+    }
+
+    // 5) Capture Photo
+    photoBtn.addEventListener('click', () => {
+      countdown(5, () => {
+        const W = video.videoWidth, H = video.videoHeight;
+        const c = document.createElement('canvas');
+        c.width = W; c.height = H;
+        c.getContext('2d').drawImage(video, 0, 0, W, H);
+        c.toBlob(blob => {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = 'aramandi.png';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        }, 'image/png');
+      });
     });
 
-    // 4) actually grab the frame and download as PNG
-    function doCapture() {
-      const W = video.videoWidth;
-      const H = video.videoHeight;
-      const capture = document.createElement('canvas');
-      capture.width  = W;
-      capture.height = H;
-      const cctx = capture.getContext('2d');
-      // draw the raw video frame—no resizing
-      cctx.drawImage(video, 0, 0, W, H);
-      // and download
-      capture.toBlob(blob => {
-        const url = URL.createObjectURL(blob);
-        const a   = document.createElement('a');
-        a.href    = url;
-        a.download= 'aramandi.png';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-      }, 'image/png');
-    }
+    // 6) Record Video (10 s max)
+    videoBtn.addEventListener('click', () => {
+      countdown(5, () => {
+        recordedChunks = [];
+        const stream = video.srcObject;
+        try {
+          mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+        } catch (e) {
+          alert('MediaRecorder error: ' + e);
+          return;
+        }
+        mediaRecorder.ondataavailable = e => {
+          if (e.data.size > 0) recordedChunks.push(e.data);
+        };
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(recordedChunks, { type: 'video/webm' });
+          const url  = URL.createObjectURL(blob);
+          const a    = document.createElement('a');
+          a.href     = url;
+          a.download = 'aramandi.webm';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        };
+        mediaRecorder.start();
+        setTimeout(() => {
+          if (mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+        }, 10000);
+      });
+    });
   </script>
 </body>
 </html>
