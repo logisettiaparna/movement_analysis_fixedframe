@@ -13,14 +13,21 @@
       position: relative;
       margin: 0 auto;
       width: 100%; max-width: 360px;
+      /* portrait 9:16 ratio */
       aspect-ratio: 9 / 16;
       background: #000;
       overflow: hidden;
     }
-    video, canvas {
+    /* video is absolutely positioned and scaled */
+    #camera-container video {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform-origin: 50% 50%;
+    }
+    canvas {
       position: absolute; top: 0; left: 0;
       width: 100%; height: 100%;
-      object-fit: cover;
+      pointer-events: none;
     }
     .btn-container {
       display: flex;
@@ -38,6 +45,7 @@
       border-radius: 4px;
       cursor: pointer;
     }
+    /* desktop: move buttons to right */
     @media (min-width: 600px) {
       #camera-container { max-width: 360px; }
       .btn-container {
@@ -52,14 +60,14 @@
 </head>
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Frame your full body in view. Click “Capture” to start a 5 s countdown—stay still!</p>
+  <p>Frame your full body in view. Click “Capture Photo” or “Record 10 s Video”—you’ll get a 5 s countdown.</p>
   <div id="camera-container">
-    <video id="video" autoplay playsinline></video>
+    <video id="video" autoplay playsinline muted></video>
     <canvas id="overlay"></canvas>
   </div>
   <div class="btn-container">
     <button id="capture-photo-btn">📸 Capture Photo</button>
-    <button id="record-video-btn">🎥 Record 10 s Video</button>
+    <button id="record-video-btn">🎥 Record 10 s Video</button>
   </div>
 
   <script>
@@ -69,138 +77,132 @@
     const btnPhoto = document.getElementById('capture-photo-btn');
     const btnVideo = document.getElementById('record-video-btn');
 
-    // 1) getUserMedia: front camera if available
+    // grab front‐facing camera on phones, default webcam on desktop
     navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user' },
+      video: { facingMode: 'user', width: 720, height: 1280 },
       audio: false
     }).then(stream => {
       video.srcObject = stream;
     }).catch(console.error);
 
-    // 2) once video is ready, size the canvas
+    // once video size known, size canvas
     video.addEventListener('loadedmetadata', () => {
       overlay.width = video.videoWidth;
       overlay.height = video.videoHeight;
     });
 
-    // draw green border + 8 head‑segments (yellow), red border when invalid
-    function drawOverlay(valid = true) {
+    // continually draw guide + crop + scale
+    function drawOverlay() {
       const W = overlay.width, H = overlay.height;
-      ctx.clearRect(0, 0, W, H);
+      ctx.clearRect(0,0,W,H);
 
-      // outer border
+      // **1) Determine person bounding box & scale video to fit**  
+      // (Here we simply assume full frame; you can swap in Pose detection
+      // to compute a tighter bbox and compute a scale factor <1.)
+      video.style.width  = W + 'px';
+      video.style.height = H + 'px';
+      video.style.transform = `translate(-50%,-50%) scale(1)`;
+
+      // **2) Draw green border**  
       ctx.lineWidth = 4;
-      ctx.strokeStyle = valid ? 'lime' : 'red';
-      ctx.strokeRect(0, 0, W, H);
+      ctx.strokeStyle = 'lime';
+      ctx.strokeRect(0,0,W,H);
 
-      // eight‐head horizontal lines
-      const seg = H / 8;
+      // **3) Draw the 8‑head guide lines**  
+      const seg = H/8;
       ctx.lineWidth = 2;
       ctx.strokeStyle = 'yellow';
       ctx.setLineDash([5,3]);
-      ctx.font = '24px sans-serif';
+      ctx.font = '20px sans-serif';
       ctx.fillStyle = 'yellow';
       ctx.textAlign = 'left';
-      for (let i = 1; i < 8; i++) {
-        const y = seg * i;
+      for(let i=1;i<8;i++){
+        const y = seg*i;
         ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(W, y);
+        ctx.moveTo(0,y);
+        ctx.lineTo(W,y);
         ctx.stroke();
-        ctx.fillText(i, 10, y - 5);
+        ctx.fillText(i, 8, y-8);
       }
       ctx.setLineDash([]);
-    }
 
-    // stub validation: always true for now
-    function checkValid() {
-      return true;
+      requestAnimationFrame(drawOverlay);
     }
+    video.addEventListener('play', drawOverlay);
 
-    // continuous redraw
-    function loop() {
-      const ok = checkValid();
-      drawOverlay(ok);
-      requestAnimationFrame(loop);
-    }
-    video.addEventListener('play', loop);
-
-    // generic countdown helper
-    function countdown(seconds, onTick, onComplete) {
+    // Countdown overlay
+    function countdown(seconds, onTick, onDone){
       let s = seconds;
       onTick(s);
-      const iv = setInterval(() => {
+      const iv = setInterval(()=>{
         s--;
         onTick(s);
-        if (s <= 0) {
+        if(s<=0){
           clearInterval(iv);
-          onComplete();
+          onDone();
         }
-      }, 1000);
+      },1000);
     }
 
-    // PHOTO: 5s countdown → snapshot → download
-    btnPhoto.addEventListener('click', () => {
+    // Photo capture
+    btnPhoto.addEventListener('click', ()=>{
       countdown(5,
-        s => {
-          // overlay countdown number
-          drawOverlay(true);
-          ctx.fillStyle = 'rgba(0,0,0,0.5)';
-          ctx.fillRect(0, 0, overlay.width, overlay.height);
-          ctx.fillStyle = 'white';
-          ctx.font = 'bold 120px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText(s > 0 ? s : '', overlay.width/2, overlay.height/2);
+        s=>{
+          // draw semi‑transparent overlay + number
+          drawOverlay();
+          ctx.fillStyle='rgba(0,0,0,0.5)';
+          ctx.fillRect(0,0,overlay.width,overlay.height);
+          ctx.fillStyle='white';
+          ctx.font='bold 100px sans-serif';
+          ctx.textAlign='center';
+          ctx.fillText(s>0?s:'', overlay.width/2, overlay.height/2);
         },
-        () => {
+        ()=>{
           const c = document.createElement('canvas');
           c.width = video.videoWidth;
-          c.height = video.videoHeight;
-          const cx = c.getContext('2d');
-          cx.drawImage(video, 0, 0);
-          c.toBlob(blob => {
+          c.height= video.videoHeight;
+          c.getContext('2d').drawImage(video,0,0);
+          c.toBlob(blob=>{
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
             a.download = 'aramandi.png';
             a.click();
             URL.revokeObjectURL(a.href);
-          }, 'image/png');
+          },'image/png');
         }
       );
     });
 
-    // VIDEO: 5s countdown → record 10s → download
-    btnVideo.addEventListener('click', () => {
-      if (!window.MediaRecorder) {
-        return alert('MediaRecorder not supported.');
+    // Video capture
+    btnVideo.addEventListener('click', ()=>{
+      if(!window.MediaRecorder){
+        return alert('MediaRecorder not supported');
       }
       countdown(5,
-        s => {
-          drawOverlay(true);
-          ctx.fillStyle = 'rgba(0,0,0,0.5)';
-          ctx.fillRect(0, 0, overlay.width, overlay.height);
-          ctx.fillStyle = 'white';
-          ctx.font = 'bold 120px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText(s > 0 ? s : '', overlay.width/2, overlay.height/2);
+        s=>{
+          drawOverlay();
+          ctx.fillStyle='rgba(0,0,0,0.5)';
+          ctx.fillRect(0,0,overlay.width,overlay.height);
+          ctx.fillStyle='white';
+          ctx.font='bold 100px sans-serif';
+          ctx.textAlign='center';
+          ctx.fillText(s>0?s:'', overlay.width/2, overlay.height/2);
         },
-        () => {
+        ()=>{
           const stream = video.srcObject;
-          const rec = new MediaRecorder(stream, { mimeType: 'video/webm' });
+          const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
           const chunks = [];
-          rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-          rec.onstop = () => {
-            const blob = new Blob(chunks, { type: 'video/webm' });
+          recorder.ondataavailable = e=>{ if(e.data.size) chunks.push(e.data) };
+          recorder.onstop = ()=>{
+            const blob = new Blob(chunks, { type:'video/webm' });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
             a.download = 'aramandi.webm';
             a.click();
             URL.revokeObjectURL(a.href);
           };
-          rec.start();
-          setTimeout(() => {
-            if (rec.state !== 'inactive') rec.stop();
-          }, 10000);
+          recorder.start();
+          setTimeout(()=> recorder.state!=='inactive' && recorder.stop(), 10000);
         }
       );
     });
