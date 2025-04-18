@@ -1,140 +1,209 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Smart Auto‑Crop Aramandi Capture</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Smart Auto‑Crop Aramandi</title>
   <style>
-    body { margin:0; font-family: sans-serif; text-align:center; background:#f8f8f8; }
-    h1 { margin:1rem 0; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #f7f7f7; font-family: sans-serif; color: #333; text-align: center; padding: 1em; }
+    h1 { margin-bottom: 0.2em; }
+    p { margin-bottom: 1em; }
     #camera-container {
       position: relative;
       margin: 0 auto;
-      /* container will never exceed 90vh on mobile or 90vw on desktop */
-      max-width: 360px; max-height: 640px;
-      width: 90vw; height: calc(90vw * (16/9));
+      width: 100%; max-width: 360px;
+      /* portrait 9:16 ratio */
+      aspect-ratio: 9 / 16;
+      background: #000;
+      overflow: hidden;
     }
-    #video {
-      width:100%; height:100%;
+    video, canvas {
+      position: absolute; top: 0; left: 0;
+      width: 100%; height: 100%;
       object-fit: cover;
-      transform: scaleX(-1); /* mirror for selfie */
     }
-    #overlay {
-      position:absolute; top:0; left:0;
-      width:100%; height:100%;
-      box-sizing:border-box;
-      pointer-events:none;
-      border: 4px solid red; /* starts red */
+    .btn-container {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.5em;
+      margin-top: 1em;
     }
-    .controls {
-      display:flex; flex-wrap:wrap;
-      justify-content:center; gap:0.5rem;
-      margin: 1rem 0;
+    .btn-container button {
+      flex: 1 1 140px;
+      padding: 0.6em;
+      font-size: 1em;
+      border: 1px solid #888;
+      background: #fff;
+      border-radius: 4px;
+      cursor: pointer;
     }
-    button {
-      flex:1 1 45%;
-      padding:0.75rem; font-size:1rem;
-    }
-    @media(min-width:600px){
-      #camera-container { max-width:360px; max-height:640px; }
-      .controls { flex-wrap:nowrap; }
-      button { flex:1; }
+    @media (min-width: 600px) {
+      #camera-container { max-width: 360px; }
+      .btn-container {
+        position: absolute;
+        top: 50%;
+        right: -180px;
+        transform: translateY(-50%);
+        flex-direction: column;
+      }
     }
   </style>
 </head>
 <body>
-  <h1>Auto‑Crop Aramandi</h1>
-  <p>Frame your full‑body in view, then tap “Capture.”</p>
+  <h1>Smart Auto‑Crop Aramandi</h1>
+  <p>Frame your full body in view. Click “Capture” to start a 5 s countdown—stay still!</p>
   <div id="camera-container">
     <video id="video" autoplay playsinline></video>
-    <div id="overlay"></div>
+    <canvas id="overlay"></canvas>
   </div>
-  <div class="controls">
-    <button id="photoBtn">📸 Capture Photo</button>
-    <button id="videoBtn">🎥 Record 10 s Video</button>
+  <div class="btn-container">
+    <button id="capture-photo-btn">📸 Capture Photo</button>
+    <button id="record-video-btn">🎥 Record 10 s Video</button>
   </div>
+
   <script>
     const video = document.getElementById('video');
     const overlay = document.getElementById('overlay');
-    const photoBtn = document.getElementById('photoBtn');
-    const videoBtn = document.getElementById('videoBtn');
+    const ctx = overlay.getContext('2d');
+    const btnPhoto = document.getElementById('capture-photo-btn');
+    const btnVideo = document.getElementById('record-video-btn');
 
-    // 1) get front camera at 1280×720 (9:16) ideal
+    // ask for front camera on phones, default webcam on desktop
     navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: 'user',
-        width:  { ideal: 720 },
-        height: { ideal: 1280 },
-        aspectRatio: 9/16
-      }
+      video: { facingMode: 'user' },
+      audio: false
     }).then(stream => {
       video.srcObject = stream;
     }).catch(console.error);
 
-    // stub validate() → toggle overlay border color.
-    function validate() {
-      // TODO: replace this with your pose/face‑mesh test.
-      // right now we'll always show green once video is playing,
-      // but you can set to red if any landmark is out of box.
-      overlay.style.borderColor = 'lime';
-    }
-
+    // once video size known, size canvas
     video.addEventListener('loadedmetadata', () => {
-      // run a quick validate() each frame
-      requestAnimationFrame(loop);
-      function loop() { validate(); requestAnimationFrame(loop); }
+      overlay.width = video.videoWidth;
+      overlay.height = video.videoHeight;
     });
 
-    // capture helper
-    function captureImage() {
-      const w = video.videoWidth, h = video.videoHeight;
-      const c = document.createElement('canvas');
-      c.width = w; c.height = h;
-      c.getContext('2d').drawImage(video, 0, 0, w, h);
-      c.toBlob(b => {
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(b);
-        a.download = 'aramandi.png';
-        a.click();
-      }, 'image/png');
+    // draw green/red border + 8 horizontal segments
+    function drawOverlay(valid = true) {
+      const W = overlay.width, H = overlay.height;
+      ctx.clearRect(0, 0, W, H);
+
+      // border
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = valid ? 'lime' : 'red';
+      ctx.strokeRect(0, 0, W, H);
+
+      // eight‑head lines
+      const seg = H / 8;
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'yellow';
+      ctx.setLineDash([5, 3]);
+      ctx.font = '24px sans-serif';
+      ctx.fillStyle = 'yellow';
+      ctx.textAlign = 'left';
+      for (let i = 1; i < 8; i++) {
+        const y = seg * i;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(W, y);
+        ctx.stroke();
+        ctx.fillText(i, 10, y - 5);
+      }
+      ctx.setLineDash([]);
     }
 
-    // 5 s countdown then snapshot
-    photoBtn.addEventListener('click', () => {
-      let cnt = 5;
-      photoBtn.textContent = `Hold still: ${cnt}…`;
+    // simple validation: face centroid should lie inside box
+    // (can expand to full‐body detection later)
+    function checkValid() {
+      // stub: always valid for now
+      return true;
+    }
+
+    // animation loop
+    function loop() {
+      const ok = checkValid();
+      drawOverlay(ok);
+      requestAnimationFrame(loop);
+    }
+    video.addEventListener('play', loop);
+
+    // countdown helper
+    function countdown(seconds, onTick, onComplete) {
+      let s = seconds;
+      onTick(s);
       const iv = setInterval(() => {
-        cnt--;
-        photoBtn.textContent = cnt>0 ? `Hold still: ${cnt}…` : 'Smile!';
-        if (cnt===0) {
+        s--;
+        onTick(s);
+        if (s <= 0) {
           clearInterval(iv);
-          captureImage();
-          photoBtn.textContent = '📸 Capture Photo';
+          onComplete();
         }
       }, 1000);
+    }
+
+    // take photo
+    btnPhoto.addEventListener('click', () => {
+      countdown(5,
+        s => {
+          // draw overlay + number
+          drawOverlay(true);
+          ctx.fillStyle = 'rgba(0,0,0,0.5)';
+          ctx.fillRect(0, 0, overlay.width, overlay.height);
+          ctx.fillStyle = 'white';
+          ctx.font = 'bold 120px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(s > 0 ? s : '', overlay.width / 2, overlay.height / 2);
+        },
+        () => {
+          // capture
+          const c = document.createElement('canvas');
+          c.width = video.videoWidth;
+          c.height = video.videoHeight;
+          c.getContext('2d').drawImage(video, 0, 0);
+          c.toBlob(blob => {
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'aramandi.png';
+            a.click();
+            URL.revokeObjectURL(a.href);
+          }, 'image/png');
+        }
+      );
     });
 
-    // 2 s prep, then record 10 s video
-    let recorder, chunks=[];
-    videoBtn.addEventListener('click', async () => {
-      videoBtn.disabled = true;
-      videoBtn.textContent = 'Get Ready…';
-      await new Promise(r=>setTimeout(r,2000));
-      videoBtn.textContent = 'Recording…';
-      chunks = [];
-      recorder = new MediaRecorder(video.srcObject, { mimeType:'video/webm' });
-      recorder.ondataavailable = e=>chunks.push(e.data);
-      recorder.onstop = () => {
-        const blob = new Blob(chunks, {type:'video/webm'});
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'aramandi.webm';
-        a.click();
-        videoBtn.disabled = false;
-        videoBtn.textContent = '🎥 Record 10 s Video';
-      };
-      recorder.start();
-      setTimeout(()=>recorder.stop(), 10000);
+    // record video
+    btnVideo.addEventListener('click', () => {
+      if (!window.MediaRecorder) {
+        return alert('MediaRecorder not supported.');
+      }
+      countdown(5,
+        s => {
+          drawOverlay(true);
+          ctx.fillStyle = 'rgba(0,0,0,0.5)';
+          ctx.fillRect(0, 0, overlay.width, overlay.height);
+          ctx.fillStyle = 'white';
+          ctx.font = 'bold 120px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(s > 0 ? s : '', overlay.width / 2, overlay.height / 2);
+        },
+        () => {
+          const stream = video.srcObject;
+          const rec = new MediaRecorder(stream, { mimeType: 'video/webm' });
+          const chunks = [];
+          rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+          rec.onstop = () => {
+            const blob = new Blob(chunks, { type: 'video/webm' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'aramandi.webm';
+            a.click();
+            URL.revokeObjectURL(a.href);
+          };
+          rec.start();
+          setTimeout(() => rec.state !== 'inactive' && rec.stop(), 10000);
+        }
+      );
     });
   </script>
 </body>
