@@ -13,7 +13,6 @@
       position: relative;
       margin: 0 auto;
       width: 100%; max-width: 360px;
-      /* portrait 9:16 ratio */
       aspect-ratio: 9 / 16;
       background: #000;
       overflow: hidden;
@@ -70,7 +69,7 @@
     const btnPhoto = document.getElementById('capture-photo-btn');
     const btnVideo = document.getElementById('record-video-btn');
 
-    // ask for front camera on phones, default webcam on desktop
+    // 1) getUserMedia: front camera if available
     navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'user' },
       audio: false
@@ -78,27 +77,27 @@
       video.srcObject = stream;
     }).catch(console.error);
 
-    // once video size known, size canvas
+    // 2) once video is ready, size the canvas
     video.addEventListener('loadedmetadata', () => {
       overlay.width = video.videoWidth;
       overlay.height = video.videoHeight;
     });
 
-    // draw green/red border + 8 horizontal segments
+    // draw green border + 8 head‑segments (yellow), red border when invalid
     function drawOverlay(valid = true) {
       const W = overlay.width, H = overlay.height;
       ctx.clearRect(0, 0, W, H);
 
-      // border
+      // outer border
       ctx.lineWidth = 4;
       ctx.strokeStyle = valid ? 'lime' : 'red';
       ctx.strokeRect(0, 0, W, H);
 
-      // eight‑head lines
+      // eight‐head horizontal lines
       const seg = H / 8;
       ctx.lineWidth = 2;
       ctx.strokeStyle = 'yellow';
-      ctx.setLineDash([5, 3]);
+      ctx.setLineDash([5,3]);
       ctx.font = '24px sans-serif';
       ctx.fillStyle = 'yellow';
       ctx.textAlign = 'left';
@@ -113,14 +112,12 @@
       ctx.setLineDash([]);
     }
 
-    // simple validation: face centroid should lie inside box
-    // (can expand to full‐body detection later)
+    // stub validation: always true for now
     function checkValid() {
-      // stub: always valid for now
       return true;
     }
 
-    // animation loop
+    // continuous redraw
     function loop() {
       const ok = checkValid();
       drawOverlay(ok);
@@ -128,7 +125,7 @@
     }
     video.addEventListener('play', loop);
 
-    // countdown helper
+    // generic countdown helper
     function countdown(seconds, onTick, onComplete) {
       let s = seconds;
       onTick(s);
@@ -142,25 +139,25 @@
       }, 1000);
     }
 
-    // take photo
+    // PHOTO: 5s countdown → snapshot → download
     btnPhoto.addEventListener('click', () => {
       countdown(5,
         s => {
-          // draw overlay + number
+          // overlay countdown number
           drawOverlay(true);
           ctx.fillStyle = 'rgba(0,0,0,0.5)';
           ctx.fillRect(0, 0, overlay.width, overlay.height);
           ctx.fillStyle = 'white';
           ctx.font = 'bold 120px sans-serif';
           ctx.textAlign = 'center';
-          ctx.fillText(s > 0 ? s : '', overlay.width / 2, overlay.height / 2);
+          ctx.fillText(s > 0 ? s : '', overlay.width/2, overlay.height/2);
         },
         () => {
-          // capture
           const c = document.createElement('canvas');
           c.width = video.videoWidth;
           c.height = video.videoHeight;
-          c.getContext('2d').drawImage(video, 0, 0);
+          const cx = c.getContext('2d');
+          cx.drawImage(video, 0, 0);
           c.toBlob(blob => {
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
@@ -172,7 +169,7 @@
       );
     });
 
-    // record video
+    // VIDEO: 5s countdown → record 10s → download
     btnVideo.addEventListener('click', () => {
       if (!window.MediaRecorder) {
         return alert('MediaRecorder not supported.');
@@ -185,7 +182,7 @@
           ctx.fillStyle = 'white';
           ctx.font = 'bold 120px sans-serif';
           ctx.textAlign = 'center';
-          ctx.fillText(s > 0 ? s : '', overlay.width / 2, overlay.height / 2);
+          ctx.fillText(s > 0 ? s : '', overlay.width/2, overlay.height/2);
         },
         () => {
           const stream = video.srcObject;
@@ -201,7 +198,9 @@
             URL.revokeObjectURL(a.href);
           };
           rec.start();
-          setTimeout(() => rec.state !== 'inactive' && rec.stop(), 10000);
+          setTimeout(() => {
+            if (rec.state !== 'inactive') rec.stop();
+          }, 10000);
         }
       );
     });
