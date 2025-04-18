@@ -3,58 +3,32 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Auto‑Framed Aramandi Capture</title>
+  <title>Auto‑Crop Aramandi Capture</title>
   <style>
-    body {
-      margin: 0;
-      font-family: sans-serif;
-      background: #f0f0f0;
-      text-align: center;
-      color: #333;
-    }
-    h1 { margin: 1rem 0 0.5rem; }
-    #instructions { margin-bottom: 1rem; padding: 0 1rem; }
+    body { margin:0; font-family:sans-serif; text-align:center; background:#f0f0f0; }
+    h1 { margin:1rem 0 0.2rem; }
     #container {
-      position: relative;
-      margin: 0 auto;
-      width: 90vw;
-      max-width: 720px;            /* for desktop */
-      aspect-ratio: 9 / 16;        /* always portrait */
-      background: #000;
-      overflow: hidden;
+      position:relative;
+      margin:0 auto;
+      width:90vw;
+      max-width:720px;
+      aspect-ratio:9/16;
+      background:#000;
+      overflow:hidden;
     }
-    #video, #canvas {
-      position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      object-fit: cover;
+    video, canvas {
+      position:absolute; top:0; left:0;
+      width:100%; height:100%;
+      object-fit:cover;
     }
-    #canvas { pointer-events: none; }
-    #controls {
-      margin: 1rem 0;
-      display: flex;
-      justify-content: center;
-      gap: 1rem;
-      flex-wrap: wrap;
-    }
-    button {
-      font-size: 1rem;
-      padding: 0.5rem 1rem;
-      cursor: pointer;
-    }
-    #countdown {
-      font-size: 1.5rem;
-      font-weight: bold;
-      color: #d00;
-      height: 1.5em;
-    }
+    #controls { margin:0.5rem; display:flex; justify-content:center; gap:1rem; flex-wrap:wrap; }
+    button { padding:0.6rem 1.2rem; font-size:1rem; cursor:pointer; }
+    #countdown { font-size:1.5rem; font-weight:bold; color:#d00; height:1.5em; }
   </style>
 </head>
 <body>
-  <h1>Auto‑Framed Aramandi Capture</h1>
-  <p id="instructions">
-    Get your <b>entire body</b> in view. When you’re ready, click to start the 5 s countdown—remain still until your photo/video snaps.
-  </p>
+  <h1>Auto‑Crop Aramandi Capture</h1>
+  <p>Frame your <b>full body</b> in view. Click “Capture” to start a 5 s countdown—stay still!</p>
 
   <div id="container">
     <video id="video" autoplay playsinline muted></video>
@@ -72,176 +46,144 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
   <script>
-  const video      = document.getElementById('video');
-  const canvas     = document.getElementById('canvas');
-  const ctx        = canvas.getContext('2d');
-  const photoBtn   = document.getElementById('photo-btn');
-  const videoBtn   = document.getElementById('video-btn');
-  const countdown  = document.getElementById('countdown');
-  let mediaRecorder, chunks = [];
+  const video     = document.getElementById('video');
+  const canvas    = document.getElementById('canvas');
+  const ctx       = canvas.getContext('2d');
+  const photoBtn  = document.getElementById('photo-btn');
+  const videoBtn  = document.getElementById('video-btn');
+  const countdown = document.getElementById('countdown');
+  let recorder, chunks = [];
+  let cropBox = null;   // { x, y, w, h } in video‑pixel coords
 
-  // 1) Initialize MediaPipe Pose
-  const pose = new Pose({
-    locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`
-  });
-  pose.setOptions({
-    modelComplexity: 0,
-    smoothLandmarks: true,
-    minDetectionConfidence: 0.5,
-    minTrackingConfidence: 0.5
-  });
+  // 1) Init Pose
+  const pose = new Pose({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+  pose.setOptions({ modelComplexity:0, smoothLandmarks:true, minDetectionConfidence:0.5, minTrackingConfidence:0.5 });
   pose.onResults(onPose);
 
   // 2) Start camera
-  const cam = new Camera(video, {
-    onFrame: async () => await pose.send({image: video}),
-    width: 1280, height: 720,
-    facingMode: 'user'
-  });
-  cam.start();
+  new Camera(video, {
+    onFrame: async () => await pose.send({image:video}),
+    width:1280, height:720, facingMode:'user'
+  }).start();
 
-  // 3) Handle each pose result — compute a tight 9×16 crop around head→heels
-  let lastBox = null;
-  function onPose(results) {
-    if (!results.poseLandmarks) {
-      return drawBlack();
+  // 3) Compute bounding‐box + margin + aspect‐fit to 9×16
+  function onPose(r) {
+    if(!r.poseLandmarks) return;
+    const W = video.videoWidth,
+          H = video.videoHeight;
+    let minX=1, maxX=0, minY=1, maxY=0;
+    for (let lm of r.poseLandmarks) {
+      minX = Math.min(minX,lm.x);
+      maxX = Math.max(maxX,lm.x);
+      minY = Math.min(minY,lm.y);
+      maxY = Math.max(maxY,lm.y);
     }
+    // pad 20%
+    const pad = 0.20*(maxY-minY);
+    minY = Math.max(0, minY-pad);
+    maxY = Math.min(1, maxY+pad);
+    minX = Math.max(0, minX-pad);
+    maxX = Math.min(1, maxX+pad);
 
-    const W = video.videoWidth, H = video.videoHeight;
-    // landmarks in normalized coords
-    const lm = results.poseLandmarks;
-    // find y‑range from forehead to heel midpoint:
-    let topY = 1, botY = 0;
-    // using landmark indices: 0:nose, 2:eye_right,5:eye_left, 27:left_heel,28:right_heel
-    const candidates = [
-      lm[0], lm[2], lm[5],
-      {x: (lm[27].x+lm[28].x)/2, y: (lm[27].y+lm[28].y)/2}
-    ];
-    for (let p of candidates) {
-      topY = Math.min(topY, p.y);
-      botY = Math.max(botY, p.y);
+    // raw crop in px
+    let cw = (maxX-minX)*W;
+    let ch = (maxY-minY)*H;
+    // fit to 9×16 (w/h = 9/16)
+    const target = 9/16;
+    if (cw/ch > target) {
+      // too wide → increase height
+      const nh = cw/target;
+      const delta = (nh - ch)/2;
+      minY = Math.max(0, minY - delta/H);
+      maxY = Math.min(1, maxY + delta/H);
+      ch = nh;
+    } else {
+      // too tall → increase width
+      const nw = ch*target;
+      const delta = (nw - cw)/2;
+      minX = Math.max(0, minX - delta/W);
+      maxX = Math.min(1, maxX + delta/W);
+      cw = nw;
     }
-    // add 10% margin
-    const heightN = botY - topY;
-    topY -= heightN*0.1;
-    botY += heightN*0.1;
-
-    // clip
-    topY = Math.max(0, topY);
-    botY = Math.min(1, botY);
-
-    // compute crop height in px, then width so that aspect 9×16 preserved
-    const cropH = (botY - topY)*H;
-    const cropW = cropH * (9/16);
-    // center crop horizontally around hip midpoint:
-    const hipMidX = (lm[23].x + lm[24].x)/2; // left_hip(23), right_hip(24)
-    const centerX = hipMidX * W;
-    let x0 = centerX - cropW/2;
-    x0 = Math.max(0, Math.min(W-cropW, x0));    // clamp
-    const y0 = topY * H;
-
-    lastBox = {x0,y0,cropW,cropH};
-    drawFrame();
+    // final box
+    cropBox = {
+      x: minX*W,
+      y: minY*H,
+      w: cw,
+      h: ch
+    };
   }
 
-  function drawBlack() {
-    const cw = canvas.width, ch = canvas.height;
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0,0,cw,ch);
+  // 4) continuously draw the cropped preview
+  function draw() {
+    if (cropBox) {
+      const vw = video.clientWidth, vh = video.clientHeight;
+      ctx.drawImage(
+        video,
+        cropBox.x, cropBox.y, cropBox.w, cropBox.h,
+        0, 0, vw, vh
+      );
+    }
+    requestAnimationFrame(draw);
   }
+  draw();
 
-  // 4) paint video → canvas using lastBox as crop
-  function drawFrame() {
-    if (!lastBox) return;
-    // ensure canvas is same display size as video
-    canvas.width  = video.clientWidth;
-    canvas.height = video.clientHeight;
-    const scaleX = video.videoWidth  / video.clientWidth;
-    const scaleY = video.videoHeight / video.clientHeight;
-
-    const sx = lastBox.x0;
-    const sy = lastBox.y0;
-    const sw = lastBox.cropW;
-    const sh = lastBox.cropH;
-    // draw
-    ctx.drawImage(
-      video,
-      sx, sy, sw, sh,
-      0, 0, canvas.width, canvas.height
-    );
-  }
-
-  // 5) 5s countdown helper
-  function doCountdown(sec, cb) {
+  // countdown helper
+  function startCountdown(sec, done) {
     countdown.textContent = sec;
     let c = sec;
-    const t = setInterval(()=>{
-      c--;
-      if (c>0) countdown.textContent=c;
-      else {
-        clearInterval(t);
-        countdown.textContent='';
-        cb();
-      }
+    const tick = setInterval(()=>{
+      c>1 ? countdown.textContent = --c
+            : (clearInterval(tick), countdown.textContent='', done());
     },1000);
   }
 
-  // 6) Capture Photo (full native crop)
+  // 5) Capture Photo
   photoBtn.onclick = ()=>{
-    doCountdown(5, ()=>{
-      if (!lastBox) return alert('No frame');
-      const {x0,y0,cropW,cropH} = lastBox;
+    if (!cropBox) return alert('Still initializing—please hold steady!');
+    startCountdown(5, ()=>{
+      const {x,y,w,h} = cropBox;
       const cap = document.createElement('canvas');
-      cap.width  = cropW;
-      cap.height = cropH;
-      const c2 = cap.getContext('2d');
-      c2.drawImage(video, x0,y0,cropW,cropH, 0,0,cropW,cropH);
-      cap.toBlob(b=>{
-        const url = URL.createObjectURL(b);
+      cap.width = w; cap.height = h;
+      cap.getContext('2d')
+         .drawImage(video, x,y,w,h, 0,0,w,h);
+      cap.toBlob(blob=>{
+        const url = URL.createObjectURL(blob);
         const a   = document.createElement('a');
         a.href    = url;
         a.download= 'aramandi.png';
-        document.body.appendChild(a);
-        a.click(); a.remove();
+        a.click();
         URL.revokeObjectURL(url);
       },'image/png');
     });
   };
 
-  // 7) Record Video (10s max) — we re‑record the raw camera stream, then crop later if you like
+  // 6) Record 10 s Video
   videoBtn.onclick = ()=>{
-    doCountdown(5, ()=>{
-      recordedChunks = [];
+    startCountdown(5, ()=>{
+      chunks = [];
+      if(!navigator.mediaDevices || !window.MediaRecorder)
+        return alert('Recorder not supported');
       const stream = video.srcObject;
       try {
-        mediaRecorder = new MediaRecorder(stream, {mimeType:'video/webm'});
-      } catch(e){
+        recorder = new MediaRecorder(stream, { mimeType:'video/webm' });
+      } catch(e) {
         return alert('Recorder error: '+e);
       }
-      mediaRecorder.ondataavailable = e=>{
-        if (e.data.size>0) recordedChunks.push(e.data);
-      };
-      mediaRecorder.onstop = ()=>{
-        const blob = new Blob(recordedChunks,{type:'video/webm'});
+      recorder.ondataavailable = e=> e.data.size&&chunks.push(e.data);
+      recorder.onstop = ()=>{
+        const blob = new Blob(chunks, { type:'video/webm' });
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
         a.href     = url;
         a.download = 'aramandi.webm';
-        document.body.appendChild(a);
-        a.click(); a.remove();
+        a.click();
         URL.revokeObjectURL(url);
       };
-      mediaRecorder.start();
-      setTimeout(()=>mediaRecorder.state!=='inactive'&&mediaRecorder.stop(),10000);
+      recorder.start();
+      setTimeout(()=>recorder.state!=='inactive'&&recorder.stop(),10000);
     });
   };
-
-  // redraw on each animation tick
-  function loop() {
-    drawFrame();
-    requestAnimationFrame(loop);
-  }
-  loop();
   </script>
 </body>
 </html>
