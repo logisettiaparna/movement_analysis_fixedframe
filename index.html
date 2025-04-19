@@ -6,28 +6,34 @@
   <title>Smart Auto‑Crop Aramandi</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #f7f7f7; font-family: sans-serif; color: #333; text-align: center; padding: 1em; }
+    body {
+      background: #f7f7f7;
+      font-family: sans-serif;
+      color: #333;
+      text-align: center;
+      padding: 1em;
+    }
     h1 { margin-bottom: 0.2em; }
     p { margin-bottom: 1em; }
 
+    /* Container keeps a 9:16 aspect ratio */
     #camera-container {
       position: relative;
+      width: 100%;
+      max-width: 360px;
       margin: 0 auto;
-      width: 100%; max-width: 360px;
-      aspect-ratio: 9/16;
       background: #000;
-      overflow: hidden;
     }
-    /* Position & size */
-    #camera-container video,
-    #camera-container canvas {
+    #camera-container::before {
+      content: "";
+      display: block;
+      padding-top: 177.78%; /* 16/9 * 100% */
+    }
+    video, canvas {
       position: absolute;
       top: 0; left: 0;
       width: 100%; height: 100%;
-    }
-    /* <video> now contains, never crops */
-    #camera-container video {
-      object-fit: contain !important;
+      object-fit: cover;
     }
 
     .btn-container {
@@ -46,20 +52,22 @@
       border-radius: 4px;
       cursor: pointer;
     }
+
     @media (min-width: 600px) {
+      /* On desktop, position buttons to the right of camera */
+      #camera-container { float: left; }
       .btn-container {
-        position: absolute;
-        top: 50%;
-        right: -180px;
-        transform: translateY(-50%);
+        margin-top: 0;
+        margin-left: 1em;
         flex-direction: column;
+        align-self: center;
       }
     }
   </style>
 </head>
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Frame your full body in view. Click “Capture Photo” or “Record 10 s Video”—you’ll get a 5 s countdown.</p>
+  <p>Frame your full body in view. Click “Capture Photo” or “Record 10 s Video” to start a 5 s countdown—stay still!</p>
 
   <div id="camera-container">
     <video id="video" autoplay playsinline muted></video>
@@ -78,126 +86,125 @@
     const btnPhoto = document.getElementById('capture-photo-btn');
     const btnVideo = document.getElementById('record-video-btn');
 
-    // Ask for the front camera on mobile, default on desktop
+    // Prefer front camera on mobile, fallback on desktop
     navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: 720, height: 1280 },
+      video: { facingMode: 'user' },
       audio: false
-    }).then(stream => {
-      video.srcObject = stream;
-    }).catch(console.error);
+    }).then(s => video.srcObject = s)
+      .catch(console.error);
 
-    // Once we know the stream size, size the canvas
     video.addEventListener('loadedmetadata', () => {
-      overlay.width  = video.videoWidth;
+      overlay.width = video.videoWidth;
       overlay.height = video.videoHeight;
+      requestAnimationFrame(drawLoop);
     });
 
-    // Draw the green border + 8‑head guide lines
-    function drawOverlay() {
+    // stub: you can replace with real person-in-frame check
+    function isInFrame() {
+      // always true for now
+      return true;
+    }
+
+    function drawLoop() {
       const W = overlay.width, H = overlay.height;
-      ctx.clearRect(0,0,W,H);
+      const ok = isInFrame();
 
-      // 1) Green border cue
-      ctx.lineWidth   = 4;
-      ctx.strokeStyle = 'lime';
-      ctx.strokeRect(0,0,W,H);
+      // clear
+      ctx.clearRect(0, 0, W, H);
 
-      // 2) Eight‑head horizontal guides
-      const seg = H/8;
-      ctx.lineWidth   = 2;
+      // border
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = ok ? 'lime' : 'red';
+      ctx.strokeRect(0, 0, W, H);
+
+      // dashed horizontal ticks (eight‑head)
+      const seg = H / 8;
+      ctx.lineWidth = 2;
       ctx.strokeStyle = 'yellow';
       ctx.setLineDash([5,3]);
-      ctx.font        = '20px sans-serif';
-      ctx.fillStyle   = 'yellow';
-      ctx.textAlign   = 'left';
-      for(let i=1;i<8;i++){
-        const y = seg*i;
+      ctx.font = '24px sans-serif';
+      ctx.fillStyle = 'yellow';
+      ctx.textAlign = 'left';
+      for (let i = 1; i < 8; i++) {
+        const y = seg * i;
         ctx.beginPath();
-        ctx.moveTo(0,y);
-        ctx.lineTo(W,y);
+        ctx.moveTo(0, y);
+        ctx.lineTo(W, y);
         ctx.stroke();
-        ctx.fillText(i, 8, y-8);
+        ctx.fillText(i, 10, y - 5);
       }
       ctx.setLineDash([]);
 
-      requestAnimationFrame(drawOverlay);
+      requestAnimationFrame(drawLoop);
     }
-    video.addEventListener('play', drawOverlay);
 
-    // Countdown helper
-    function countdown(seconds, onTick, onDone){
-      let s = seconds;
+    function countdown(sec, onTick, onDone) {
+      let s = sec;
       onTick(s);
-      const iv = setInterval(()=>{
+      const iv = setInterval(() => {
         s--;
         onTick(s);
-        if(s<=0){
+        if (s <= 0) {
           clearInterval(iv);
           onDone();
         }
-      },1000);
+      }, 1000);
     }
 
-    // Capture Photo
-    btnPhoto.addEventListener('click', ()=>{
-      countdown(5,
-        s=>{
-          // show big number overlay
-          drawOverlay();
+    function flashCountdown(seconds, cb) {
+      countdown(seconds,
+        s => {
+          // draw current overlay
+          // then darken + show number
           ctx.fillStyle = 'rgba(0,0,0,0.5)';
           ctx.fillRect(0,0,overlay.width,overlay.height);
-          ctx.fillStyle = 'white';
-          ctx.font      = 'bold 100px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText(s>0?s:'', overlay.width/2, overlay.height/2);
+          if (s > 0) {
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 120px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(s, overlay.width/2, overlay.height/2 + 40);
+          }
         },
-        ()=>{
-          const c = document.createElement('canvas');
-          c.width  = video.videoWidth;
-          c.height = video.videoHeight;
-          c.getContext('2d').drawImage(video, 0, 0);
-          c.toBlob(blob=>{
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = 'aramandi.png';
-            a.click();
-            URL.revokeObjectURL(a.href);
-          }, 'image/png');
-        }
+        cb
       );
+    }
+
+    btnPhoto.addEventListener('click', () => {
+      flashCountdown(5, () => {
+        const c = document.createElement('canvas');
+        c.width = video.videoWidth;
+        c.height = video.videoHeight;
+        c.getContext('2d').drawImage(video, 0, 0);
+        c.toBlob(blob => {
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'aramandi.png';
+          a.click();
+          URL.revokeObjectURL(a.href);
+        }, 'image/png');
+      });
     });
 
-    // Record 10s Video
-    btnVideo.addEventListener('click', ()=>{
-      if(!window.MediaRecorder){
+    btnVideo.addEventListener('click', () => {
+      if (!window.MediaRecorder) {
         return alert('MediaRecorder not supported');
       }
-      countdown(5,
-        s=>{
-          drawOverlay();
-          ctx.fillStyle = 'rgba(0,0,0,0.5)';
-          ctx.fillRect(0,0,overlay.width,overlay.height);
-          ctx.fillStyle = 'white';
-          ctx.font      = 'bold 100px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText(s>0?s:'', overlay.width/2, overlay.height/2);
-        },
-        ()=>{
-          const recorder = new MediaRecorder(video.srcObject, { mimeType: 'video/webm' });
-          const chunks   = [];
-          recorder.ondataavailable = e=>{ if(e.data.size) chunks.push(e.data) };
-          recorder.onstop = ()=>{
-            const blob = new Blob(chunks, { type: 'video/webm' });
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = 'aramandi.webm';
-            a.click();
-            URL.revokeObjectURL(a.href);
-          };
-          recorder.start();
-          setTimeout(()=> recorder.state!=='inactive' && recorder.stop(), 10000);
-        }
-      );
+      flashCountdown(5, () => {
+        const stream = video.srcObject;
+        const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+        const data = [];
+        recorder.ondataavailable = e => e.data.size && data.push(e.data);
+        recorder.onstop = () => {
+          const blob = new Blob(data, { type: 'video/webm' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'aramandi.webm';
+          a.click();
+          URL.revokeObjectURL(a.href);
+        };
+        recorder.start();
+        setTimeout(() => recorder.state === 'recording' && recorder.stop(), 10000);
+      });
     });
   </script>
 </body>
