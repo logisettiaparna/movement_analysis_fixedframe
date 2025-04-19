@@ -15,27 +15,22 @@
     }
     h1 { margin-bottom: 0.2em; }
     p { margin-bottom: 1em; }
-
-    /* Container keeps a 9:16 aspect ratio */
     #camera-container {
       position: relative;
+      margin: 0 auto;
       width: 100%;
       max-width: 360px;
-      margin: 0 auto;
+      aspect-ratio: 9 / 16;
       background: #000;
-    }
-    #camera-container::before {
-      content: "";
-      display: block;
-      padding-top: 177.78%; /* 16/9 * 100% */
+      overflow: hidden;
     }
     video, canvas {
       position: absolute;
       top: 0; left: 0;
-      width: 100%; height: 100%;
+      width: 100%;
+      height: 100%;
       object-fit: cover;
     }
-
     .btn-container {
       display: flex;
       flex-wrap: wrap;
@@ -52,22 +47,21 @@
       border-radius: 4px;
       cursor: pointer;
     }
-
     @media (min-width: 600px) {
-      /* On desktop, position buttons to the right of camera */
-      #camera-container { float: left; }
+      #camera-container { max-width: 360px; }
       .btn-container {
-        margin-top: 0;
-        margin-left: 1em;
+        position: absolute;
+        top: 50%;
+        right: -180px;
+        transform: translateY(-50%);
         flex-direction: column;
-        align-self: center;
       }
     }
   </style>
 </head>
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Frame your full body in view. Click “Capture Photo” or “Record 10 s Video” to start a 5 s countdown—stay still!</p>
+  <p>Frame your full body in view. Click “Capture Photo” or “Record 10 s Video.”</p>
 
   <div id="camera-container">
     <video id="video" autoplay playsinline muted></video>
@@ -76,135 +70,154 @@
 
   <div class="btn-container">
     <button id="capture-photo-btn">📸 Capture Photo</button>
-    <button id="record-video-btn">🎥 Record 10 s Video</button>
+    <button id="record-video-btn">🎥 Record 10 s Video</button>
   </div>
 
   <script>
-    const video = document.getElementById('video');
-    const overlay = document.getElementById('overlay');
-    const ctx = overlay.getContext('2d');
+    const video  = document.getElementById('video');
+    const overlay= document.getElementById('overlay');
+    const ctx    = overlay.getContext('2d');
     const btnPhoto = document.getElementById('capture-photo-btn');
     const btnVideo = document.getElementById('record-video-btn');
 
-    // Prefer front camera on mobile, fallback on desktop
+    // 1) grab camera
     navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'user' },
       audio: false
-    }).then(s => video.srcObject = s)
-      .catch(console.error);
-
-    video.addEventListener('loadedmetadata', () => {
-      overlay.width = video.videoWidth;
-      overlay.height = video.videoHeight;
-      requestAnimationFrame(drawLoop);
+    }).then(s => {
+      video.srcObject = s;
+    }).catch(err => {
+      console.error('Camera error:', err);
+      alert('Could not access camera.');
     });
 
-    // stub: you can replace with real person-in-frame check
-    function isInFrame() {
-      // always true for now
-      return true;
-    }
+    // 2) size overlay when we know video dims
+    video.addEventListener('loadedmetadata', () => {
+      overlay.width  = video.videoWidth;
+      overlay.height = video.videoHeight;
+    });
 
-    function drawLoop() {
+    // 3) draw 8‐head overlay in red until valid, then green
+    function drawOverlay(valid) {
       const W = overlay.width, H = overlay.height;
-      const ok = isInFrame();
-
-      // clear
       ctx.clearRect(0, 0, W, H);
 
       // border
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = ok ? 'lime' : 'red';
+      ctx.lineWidth   = 4;
+      ctx.strokeStyle = valid ? 'lime' : 'red';
       ctx.strokeRect(0, 0, W, H);
 
-      // dashed horizontal ticks (eight‑head)
+      // eight segments
       const seg = H / 8;
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = 'yellow';
-      ctx.setLineDash([5,3]);
-      ctx.font = '24px sans-serif';
-      ctx.fillStyle = 'yellow';
-      ctx.textAlign = 'left';
+      ctx.lineWidth   = 2;
+      ctx.strokeStyle = valid ? 'lime' : 'red';
+      ctx.setLineDash([6, 4]);
+      ctx.font        = '20px sans-serif';
+      ctx.fillStyle   = valid ? 'lime' : 'red';
+      ctx.textAlign   = 'left';
+
       for (let i = 1; i < 8; i++) {
         const y = seg * i;
         ctx.beginPath();
         ctx.moveTo(0, y);
         ctx.lineTo(W, y);
         ctx.stroke();
-        ctx.fillText(i, 10, y - 5);
+        ctx.fillText(i, 8, y - 8);
       }
       ctx.setLineDash([]);
-
-      requestAnimationFrame(drawLoop);
     }
 
-    function countdown(sec, onTick, onDone) {
-      let s = sec;
+    // 4) stub validity check – replace with face/body detection later
+    function checkValid() {
+      // TODO: swap in full-body landmark test
+      // Right now: always false until you implement detection.
+      return false;
+    }
+
+    // 5) animation loop
+    function loop() {
+      const ok = checkValid();
+      drawOverlay(ok);
+      requestAnimationFrame(loop);
+    }
+    video.addEventListener('play', loop);
+
+    // 6) countdown helper
+    function countdown(seconds, onTick, onComplete) {
+      let s = seconds;
       onTick(s);
       const iv = setInterval(() => {
         s--;
         onTick(s);
         if (s <= 0) {
           clearInterval(iv);
-          onDone();
+          onComplete();
         }
       }, 1000);
     }
 
-    function flashCountdown(seconds, cb) {
-      countdown(seconds,
+    // 7) capture photo flow
+    btnPhoto.addEventListener('click', () => {
+      countdown(5,
         s => {
-          // draw current overlay
-          // then darken + show number
+          // draw big number overlay
+          drawOverlay(true);
           ctx.fillStyle = 'rgba(0,0,0,0.5)';
           ctx.fillRect(0,0,overlay.width,overlay.height);
-          if (s > 0) {
-            ctx.fillStyle = 'white';
-            ctx.font = 'bold 120px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText(s, overlay.width/2, overlay.height/2 + 40);
-          }
+          ctx.fillStyle = 'white';
+          ctx.font      = 'bold 120px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(s>0?s:'', overlay.width/2, overlay.height/2);
         },
-        cb
+        () => {
+          // grab still
+          const c = document.createElement('canvas');
+          c.width  = video.videoWidth;
+          c.height = video.videoHeight;
+          c.getContext('2d').drawImage(video,0,0);
+          c.toBlob(blob => {
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'aramandi.png';
+            a.click();
+            URL.revokeObjectURL(a.href);
+          }, 'image/png');
+        }
       );
-    }
-
-    btnPhoto.addEventListener('click', () => {
-      flashCountdown(5, () => {
-        const c = document.createElement('canvas');
-        c.width = video.videoWidth;
-        c.height = video.videoHeight;
-        c.getContext('2d').drawImage(video, 0, 0);
-        c.toBlob(blob => {
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = 'aramandi.png';
-          a.click();
-          URL.revokeObjectURL(a.href);
-        }, 'image/png');
-      });
     });
 
+    // 8) record 10s video flow
     btnVideo.addEventListener('click', () => {
       if (!window.MediaRecorder) {
-        return alert('MediaRecorder not supported');
+        return alert('Video recording not supported');
       }
-      flashCountdown(5, () => {
-        const stream = video.srcObject;
-        const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
-        const data = [];
-        recorder.ondataavailable = e => e.data.size && data.push(e.data);
-        recorder.onstop = () => {
-          const blob = new Blob(data, { type: 'video/webm' });
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = 'aramandi.webm';
-          a.click();
-          URL.revokeObjectURL(a.href);
-        };
-        recorder.start();
-        setTimeout(() => recorder.state === 'recording' && recorder.stop(), 10000);
-      });
+      countdown(5,
+        s => {
+          drawOverlay(true);
+          ctx.fillStyle = 'rgba(0,0,0,0.5)';
+          ctx.fillRect(0,0,overlay.width,overlay.height);
+          ctx.fillStyle = 'white';
+          ctx.font      = 'bold 120px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(s>0?s:'', overlay.width/2, overlay.height/2);
+        },
+        () => {
+          const stream = video.srcObject;
+          const rec    = new MediaRecorder(stream, { mimeType: 'video/webm' });
+          const chunks = [];
+          rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+          rec.onstop = () => {
+            const blob = new Blob(chunks, { type: 'video/webm' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'aramandi.webm';
+            a.click();
+            URL.revokeObjectURL(a.href);
+          };
+          rec.start();
+          setTimeout(() => rec.state!=='inactive' && rec.stop(), 10000);
+        }
+      );
     });
   </script>
 </body>
