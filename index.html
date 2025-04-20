@@ -1,14 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Smart Auto‑Crop Aramandi</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0 }
-    body { font-family: sans-serif; background: #f0f0f0; text-align:center; padding:1em; }
-    h1 { margin-bottom:0.2em; }
-    #container { display:flex; flex-direction:column; align-items:center; position:relative; }
+    * { box-sizing: border-box; margin:0; padding:0 }
+    body { font-family:sans-serif; background:#f7f7f7; text-align:center; padding:1em }
+    h1 { margin-bottom:0.2em }
+    p  { margin-bottom:1em }
+    #container {
+      display:flex; flex-direction:column; align-items:center; position:relative;
+    }
     video, canvas {
       position:absolute; top:0; left:0;
       width:100%; max-width:360px;
@@ -16,72 +19,78 @@
       object-fit:cover;
       background:#000;
     }
-    #video { z-index:1; }
-    #overlay { z-index:2; pointer-events:none; }
+    #video { z-index:1 }
+    #overlay {
+      z-index:2;
+      pointer-events:none;
+      background:transparent;
+    }
     #controls {
-      margin-top:calc(9/16*360px + 1em);
       display:flex; flex-wrap:wrap; justify-content:center; gap:0.5em;
+      margin-top:calc(100% * 9/16 + 1em);
     }
     #controls button {
-      padding:0.6em 1em; font-size:1em;
+      flex:1 1 140px;
+      padding:0.6em; font-size:1em;
       border:1px solid #888; background:#fff; border-radius:4px;
       cursor:pointer;
     }
     #status {
-      margin-top:1em; font-size:1.2em; font-weight:bold; min-height:1.4em;
+      margin-top:1em; font-size:1.2em; min-height:1.4em;
     }
-    @media (min-width:600px) {
-      #container { flex-direction:row; align-items:flex-start; }
-      #controls { flex-direction:column; margin-left:1em; margin-top:0; }
+    @media(min-width:600px){
+      #container { flex-direction:row; justify-content:center }
+      #controls { margin-top:0; margin-left:1em; flex-direction:column }
     }
   </style>
 </head>
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Get full‑body in view—when forehead clears top slice & ankles land on orange bar, you’re “IN FRAME.” Pose for 10 s then we auto‑capture.</p>
+  <p>Get full‑body in view—when forehead clears top slice & ankles land in the orange bar, you’re “IN FRAME.” Pose for 10 s then we auto‑capture.</p>
 
   <div id="container">
     <video id="video" autoplay playsinline></video>
     <canvas id="overlay"></canvas>
-    <div id="controls">
-      <button id="resetBtn">🔄 Reset</button>
-      <button id="manualBtn">📸 Capture Now</button>
-    </div>
+  </div>
+
+  <div id="controls">
+    <button id="resetBtn">🔄 Reset</button>
+    <button id="manualBtn">📸 Manual (5 s)</button>
   </div>
 
   <div id="status"></div>
 
-  <!-- Mediapipe -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <!-- Mediapipe & camera utils -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.5/camera_utils.js"></script>
   <script>
-    const video    = document.getElementById('video');
-    const overlay  = document.getElementById('overlay');
-    const ctx      = overlay.getContext('2d');
-    const resetBtn = document.getElementById('resetBtn');
-    const manualBtn= document.getElementById('manualBtn');
-    const statusEl = document.getElementById('status');
+    const video    = document.getElementById('video'),
+          overlay  = document.getElementById('overlay'),
+          ctx      = overlay.getContext('2d'),
+          statusEl = document.getElementById('status'),
+          resetBtn = document.getElementById('resetBtn'),
+          manualBtn= document.getElementById('manualBtn');
 
-    let inFrame    = false;
-    let counting   = false;
+    let inFrame=false, counting=false;
 
-    // 1) Camera permission
+    // 1) Camera access
     navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:false})
-      .then(s=> video.srcObject=s)
-      .catch(_=> alert("Please allow camera access"));
+      .then(stream=> video.srcObject=stream)
+      .catch(err=> alert("❌ Please allow camera access"));
 
     video.addEventListener('loadedmetadata',()=>{
       overlay.width  = video.videoWidth;
       overlay.height = video.videoHeight;
     });
 
-    function drawOverlay(good){
-      const W = overlay.width, H = overlay.height;
+    // draw border, slices, orange bar
+    function drawOverlay(ok){
+      const W=overlay.width, H=overlay.height;
       ctx.clearRect(0,0,W,H);
 
-      // border
+      // thick border
       ctx.lineWidth   = 6;
-      ctx.strokeStyle = good?'lime':'red';
+      ctx.strokeStyle = ok?'lime':'red';
       ctx.strokeRect(0,0,W,H);
 
       // 7 dashed slices
@@ -90,7 +99,7 @@
       ctx.lineWidth   = 2;
       ctx.strokeStyle = 'yellow';
       for(let i=1;i<8;i++){
-        const y = slice*i;
+        let y = slice*i;
         ctx.beginPath();
         ctx.moveTo(0,y);
         ctx.lineTo(W,y);
@@ -98,102 +107,93 @@
       }
       ctx.setLineDash([]);
 
-      // bottom orange bar (1/8th high)
+      // orange bar bottom slice
       ctx.fillStyle = 'orange';
       ctx.fillRect(0,H-slice,W,slice);
     }
 
-    function startCountdown(secs, msgTemplate, onTick, onDone){
-      let s=secs;
-      onTick(s);
-      const iv = setInterval(()=>{
+    function startTimer(sec, onTick, onDone){
+      let s=sec; onTick(s);
+      const iv=setInterval(()=>{
         s--;
         if(s>0) onTick(s);
-        else{
-          clearInterval(iv);
-          onDone();
-        }
+        else { clearInterval(iv); onDone(); }
       },1000);
     }
 
-    function capturePhoto(){
-      const c = document.createElement('canvas');
-      c.width = video.videoWidth; c.height = video.videoHeight;
+    function capture(){
+      const c=document.createElement('canvas');
+      c.width=video.videoWidth; c.height=video.videoHeight;
       c.getContext('2d').drawImage(video,0,0);
       c.toBlob(b=>{
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(b);
-        a.download = 'aramandi.png';
+        const a=document.createElement('a');
+        a.href=URL.createObjectURL(b);
+        a.download='aramandi.png';
         a.click();
         URL.revokeObjectURL(a.href);
       });
     }
 
-    // Mediapipe Pose
-    const pose = new Pose.Pose({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`});
+    // Mediapipe Pose setup
+    const pose = new Pose.Pose({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${f}`});
     pose.setOptions({modelComplexity:0, smoothLandmarks:true, minDetectionConfidence:0.5, minTrackingConfidence:0.5});
     pose.onResults(onPose);
 
-    const cam = new Camera.Camera(video,{onFrame:async()=>{await pose.send({image:video});},width:720,height:1280});
+    const cam = new Camera.Camera(video,{
+      onFrame:async()=> await pose.send({image:video}),
+      width:720, height:1280
+    });
     cam.start();
 
     function onPose(res){
+      if(!overlay.width) return;
       const lm = res.poseLandmarks;
       if(!lm){ drawOverlay(false); return; }
 
-      // forehead approx: midpoint of inner eyes, shifted up
-      const ie1=lm[Pose.PoseLandmark.LEFT_EYE_INNER], ie2=lm[Pose.PoseLandmark.RIGHT_EYE_INNER];
-      const ex=(ie1.x+ie2.x)/2, ey=(ie1.y+ie2.y)/2 - 0.08;
-      const headY = ey*overlay.height;
+      // approx forehead: eyes‑inner midpoint minus a bit
+      const ie1=lm[Pose.PoseLandmark.LEFT_EYE_INNER],
+            ie2=lm[Pose.PoseLandmark.RIGHT_EYE_INNER];
+      const fx=(ie1.x+ie2.x)/2, fy=(ie1.y+ie2.y)/2 - 0.08;
+      const headY = fy*overlay.height;
 
-      // ankles midpoint
-      const a1=lm[Pose.PoseLandmark.LEFT_ANKLE], a2=lm[Pose.PoseLandmark.RIGHT_ANKLE];
+      // ankle midpoint
+      const a1=lm[Pose.PoseLandmark.LEFT_ANKLE],
+            a2=lm[Pose.PoseLandmark.RIGHT_ANKLE];
       const ay = ((a1.y+a2.y)/2)*overlay.height;
 
       const slice = overlay.height/8;
-      const topOK  = headY < slice;
-      const botOK  = ay > (overlay.height - slice) && ay <= overlay.height;
+      const topOK = headY < slice;
+      const botOK = ay > (overlay.height - slice);
 
-      const good = topOK && botOK;
-      drawOverlay(good);
+      const ok = topOK && botOK;
+      drawOverlay(ok);
 
-      // when first “in frame” hit, start a 10s countdown for pose capture
-      if(good && !inFrame && !counting){
-        inFrame  = true;
-        counting = true;
-        statusEl.textContent = "✅ IN FRAME – pose now!";
-        startCountdown(10,
-          s => statusEl.textContent = `✅ IN FRAME – capturing in ${s}s…`,
-          s => {},
-          ()=>{
-            capturePhoto();
-            statusEl.textContent = "📷 Captured!";
-            counting = false;
-          }
+      // once it flips to OK, start 10s capture
+      if(ok && !inFrame && !counting){
+        inFrame=true; counting=true;
+        statusEl.textContent = "✅ IN FRAME! Pose now…";
+        startTimer(10,
+          s=> statusEl.textContent = `✅ Capturing in ${s}s…`,
+          ()=>{ capture(); statusEl.textContent="📷 Captured!"; counting=false; }
         );
       }
     }
 
-    // manual capture: 5s self‑timer
+    // Manual 5s timer
     manualBtn.onclick = ()=>{
       if(counting) return;
       inFrame=false; counting=true;
-      statusEl.textContent = "📸 Manual – capturing in 5s…";
-      startCountdown(5,
-        s=>statusEl.textContent=`📸 Manual – capturing in ${s}s…`,
-        s=>{},
-        ()=>{
-          capturePhoto();
-          statusEl.textContent="📷 Captured!";
-          counting=false;
-        }
+      statusEl.textContent="📸 Manual timer…";
+      startTimer(5,
+        s=> statusEl.textContent=`📸 Capturing in ${s}s…`,
+        ()=>{ capture(); statusEl.textContent="📷 Captured!"; counting=false; }
       );
     };
 
     resetBtn.onclick = ()=>{
-      inFrame=false;
-      counting=false;
-      statusEl.textContent = "";
+      inFrame=false; counting=false;
+      statusEl.textContent="";
+      drawOverlay(false);
     };
   </script>
 </body>
