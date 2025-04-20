@@ -1,215 +1,201 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Smart Auto‑Crop Aramandi</title>
-<style>
-  * { box-sizing: border-box; margin:0; padding:0 }
-  body { font-family:sans-serif; text-align:center; padding:1em; background:#f7f7f7 }
-  h1 { margin-bottom:.2em }
-  p  { margin-bottom:1em }
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Smart Auto‑Crop Aramandi</title>
+  <style>
+    * { box-sizing:border-box; margin:0; padding:0 }
+    body { background:#f7f7f7; font-family:sans-serif; text-align:center; color:#333; }
+    h1 { margin:.5em 0 .2em }
+    p  { margin-bottom:1em }
 
-  #camera-container {
-    position:relative;
-    margin:0 auto;
-    width:100%; max-width:360px;
-    aspect-ratio:9/16;
-    overflow:hidden;
-    background:#000;
-  }
-  video, canvas {
-    position:absolute;
-    top:0; left:0;
-    width:100%; height:100%;
-    object-fit:cover;
-  }
-
-  /* small centered cue bar */
-  #stand-plate {
-    position:absolute;
-    bottom:12px;
-    left:50%;
-    transform:translateX(-50%);
-    width:60%;
-    max-width:180px;
-    padding:.4em;
-    background:#f5a623;
-    color:#fff;
-    font-weight:bold;
-    border-radius:4px;
-    z-index:2;
-  }
-
-  /* foot platform at slice‑8 */
-  #foot-plate {
-    position:absolute;
-    left:10%;
-    width:80%;
-    height:4px;
-    background:#f5a623;
-    z-index:1;
-  }
-
-  .btn-container {
-    display:flex;
-    justify-content:center;
-    gap:.5em;
-    flex-wrap:wrap;
-    margin-top:1em;
-  }
-  .btn-container button {
-    flex:1 1 140px;
-    padding:.6em; font-size:1em;
-    border:1px solid #888; background:#fff;
-    border-radius:4px; cursor:pointer;
-  }
-  #countdown-display {
-    margin-top:.5em;
-    font-size:1.6em;
-    color:#e33;
-    min-height:1.2em;
-  }
-</style>
+    #camera-container {
+      position:relative;
+      margin:0 auto;
+      width:100%; max-width:360px;
+      aspect-ratio:9/16;
+      overflow:hidden;
+      background:#000;
+    }
+    video, canvas {
+      position:absolute; top:0; left:0;
+      width:100%; height:100%;
+      object-fit:cover;
+    }
+    /* tiny orange dots for forehead+ankles */
+    .dot {
+      position:absolute;
+      width:16px; height:16px;
+      margin:-8px 0 0 -8px; /* center it */
+      background:#f5a623;
+      border-radius:50%;
+      z-index:2;
+      pointer-events:none;
+    }
+    /* countdown display */
+    #countdown {
+      margin-top:.5em;
+      font-size:1.5em;
+      color:#e33;
+      min-height:1.2em;
+    }
+    button {
+      margin:1em .2em;
+      padding:.6em 1em;
+      font-size:1em;
+      border:1px solid #888; background:#fff;
+      border-radius:4px; cursor:pointer;
+    }
+  </style>
 </head>
 <body>
-
   <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Frame your full body—when your head &amp; feet hit the top &amp; bottom slices, we’ll auto‑capture.</p>
+  <p>Step so your forehead dot hits the top slice and your heels hit the bottom—then we’ll auto‑snap.</p>
 
   <div id="camera-container">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="overlay"></canvas>
-
-    <!-- smaller thumb‑rule to stand on -->
-    <div id="stand-plate">Stand Here →</div>
-    <!-- this will be repositioned in JS to exactly the 8th slice -->
-    <div id="foot-plate"></div>
+    <div id="dot-forehead" class="dot"></div>
+    <div id="dot-ankles"  class="dot"></div>
   </div>
 
-  <div class="btn-container">
-    <button id="capture-photo-btn">📸 Capture Photo</button>
-    <button id="record-video-btn">🎥 Record 10 s Video</button>
+  <div>
+    <button id="manual-capture">📸 Capture Now</button>
   </div>
-  <div id="countdown-display"></div>
+  <div id="countdown"></div>
 
-<script>
-  const video = document.getElementById('video'),
-        overlay = document.getElementById('overlay'),
-        standPlate = document.getElementById('stand-plate'),
-        footPlate  = document.getElementById('foot-plate'),
-        ctx        = overlay.getContext('2d'),
-        cdDisplay  = document.getElementById('countdown-display'),
-        btnPhoto   = document.getElementById('capture-photo-btn'),
-        btnVideo   = document.getElementById('record-video-btn');
+  <!-- load MediaPipe Pose -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
-  let framed = false;
+  <script>
+    const video      = document.getElementById('video'),
+          overlay    = document.getElementById('overlay'),
+          ctx        = overlay.getContext('2d'),
+          dotFore    = document.getElementById('dot-forehead'),
+          dotAnkles  = document.getElementById('dot-ankles'),
+          manualBtn  = document.getElementById('manual-capture'),
+          countdownEl= document.getElementById('countdown');
 
-  // camera on
-  navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:false})
-    .then(s=> video.srcObject=s)
-    .catch(_=> alert('Camera access needed.'));
+    let aligned = false;
 
-  video.addEventListener('loadedmetadata', () => {
-    overlay.width  = video.videoWidth;
-    overlay.height = video.videoHeight;
-    // position the foot plate at the 8th slice
-    const slice8 = overlay.height * 7/8;
-    footPlate.style.top    = slice8 + 'px';
-    footPlate.style.width  = '100%';
-    footPlate.style.left   = '0';
-    footPlate.style.height = '4px';
-    // kick off the overlay loop
-    requestAnimationFrame(drawOverlay);
-  });
+    // start camera
+    navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}, audio:false})
+      .then(stream=> video.srcObject = stream)
+      .catch(_=> alert('Cannot access camera.'));
 
-  function drawOverlay(){
-    const W=overlay.width, H=overlay.height;
-    ctx.clearRect(0,0,W,H);
+    video.onloadedmetadata = () => {
+      overlay.width  = video.videoWidth;
+      overlay.height = video.videoHeight;
+      initPose();
+      requestAnimationFrame(drawOverlay);
+    };
 
-    // 8 slices
-    const seg = H/8;
+    // compute slice heights
+    function sliceY(i){ return overlay.height * (i/8); }
 
-    // border
-    ctx.lineWidth   = 8;             // thicker!
-    ctx.strokeStyle = framed?'lime':'red';
-    ctx.strokeRect(0,0,W,H);
+    function drawOverlay(){
+      const W=overlay.width, H=overlay.height;
+      ctx.clearRect(0,0,W,H);
 
-    // dashed slice lines
-    ctx.setLineDash([5,3]);
-    ctx.lineWidth   = 3;
-    ctx.strokeStyle = framed?'lime':'yellow';
-    ctx.fillStyle   = framed?'lime':'yellow';
-    ctx.font        = '20px sans-serif';
-    ctx.textAlign   = 'left';
-    for(let i=1; i<8; i++){
-      const y = seg*i;
-      ctx.beginPath();
-      ctx.moveTo(0,y);
-      ctx.lineTo(W,y);
-      ctx.stroke();
-      ctx.fillText(i, 8, y-6);
+      // border
+      ctx.lineWidth   = 8;
+      ctx.strokeStyle = aligned ? 'lime' : 'red';
+      ctx.strokeRect(0,0,W,H);
+
+      // dashed slices
+      ctx.setLineDash([6,4]);
+      ctx.lineWidth   = 3;
+      ctx.strokeStyle = aligned ? 'lime' : 'yellow';
+      ctx.font        = '20px sans-serif';
+      ctx.fillStyle   = aligned ? 'lime' : 'yellow';
+      ctx.textAlign   = 'left';
+
+      for(let i=1;i<8;i++){
+        let y = sliceY(i);
+        ctx.beginPath();
+        ctx.moveTo(0,y);
+        ctx.lineTo(W,y);
+        ctx.stroke();
+        ctx.fillText(i, 8, y-6);
+      }
+      ctx.setLineDash([]);
+      requestAnimationFrame(drawOverlay);
     }
-    ctx.setLineDash([]);
 
-    // temporary stub: toggle framing on dblclick
-    // you’ll replace this with your real pose‐check code
-    requestAnimationFrame(drawOverlay);
-  }
-  video.addEventListener('dblclick', ()=> framed = !framed);
+    // countdown helper
+    function countdown(sec, onTick, onDone){
+      let s=sec; onTick(s);
+      const iv = setInterval(()=>{
+        s--; onTick(s);
+        if(s<=0){ clearInterval(iv); onDone(); }
+      },1000);
+    }
 
-  function countdown(sec, tick, done){
-    let s=sec; tick(s);
-    const iv = setInterval(()=>{
-      s--; tick(s);
-      if(s<=0){ clearInterval(iv); done(); }
-    },1000);
-  }
+    function snapPhoto(){
+      const c = document.createElement('canvas');
+      c.width = video.videoWidth;  c.height = video.videoHeight;
+      c.getContext('2d').drawImage(video,0,0);
+      c.toBlob(b=>{
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(b);
+        a.download='aramandi.png';
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }, 'image/png');
+    }
 
-  btnPhoto.onclick = ()=>{
-    if(!framed && !confirm('Not aligned yet — capture anyway?')) return;
-    countdown(5,
-      s=> cdDisplay.textContent = s>0?`📸 in ${s}…`:'',
-      ()=>{
-        cdDisplay.textContent = '';
-        const c = document.createElement('canvas');
-        c.width = video.videoWidth;
-        c.height= video.videoHeight;
-        c.getContext('2d').drawImage(video,0,0);
-        c.toBlob(b=>{
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(b);
-          a.download='aramandi.png';
-          a.click();
-          URL.revokeObjectURL(a.href);
-        },'image/png');
-      }
-    );
-  };
+    manualBtn.onclick = ()=>{
+      countdown(5,
+        s=> countdownEl.textContent = s>0 ? `📸 in ${s}…` : '',
+        ()=>{ countdownEl.textContent=''; snapPhoto(); }
+      );
+    };
 
-  btnVideo.onclick = ()=>{
-    if(!framed && !confirm('Not aligned yet — record anyway?')) return;
-    countdown(5,
-      s=> cdDisplay.textContent = s>0?`🎥 in ${s}…`:'',
-      ()=>{
-        cdDisplay.textContent = '';
-        if(!window.MediaRecorder) return alert('Recorder not supported');
-        const rec = new MediaRecorder(video.srcObject,{mimeType:'video/webm'});
-        const chunks=[];
-        rec.ondataavailable = e=> e.data.size && chunks.push(e.data);
-        rec.onstop = ()=>{
-          const blob = new Blob(chunks,{type:'video/webm'});
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download='aramandi.webm';
-          a.click();
-          URL.revokeObjectURL(a.href);
-        };
-        rec.start();
-        setTimeout(()=> rec.state!=='inactive' && rec.stop(),10000);
-      }
-    );
-  };
-</script>
+    // ----------- MediaPipe Pose ----------------
+    let noseY=0, heelsY=0;
+    function initPose(){
+      const pose = new Pose({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`});
+      pose.setOptions({modelComplexity:0, smoothLandmarks:true, enableSegmentation:false});
+      pose.onResults(res=>{
+        if(!res.poseLandmarks) return;
+        // landmark indices: NOSE=0, LEFT_HEEL=29, RIGHT_HEEL=30
+        noseY   = res.poseLandmarks[0].y * overlay.height;
+        const y1= res.poseLandmarks[29].y * overlay.height,
+              y2= res.poseLandmarks[30].y * overlay.height;
+        heelsY  = (y1+y2)/2;
+
+        // position the two little dots
+        dotFore.style.top  = sliceY(1) + 'px';
+        dotFore.style.left = (res.poseLandmarks[0].x * overlay.width) + 'px';
+        dotAnkles.style.top  = sliceY(7) + 'px';
+        dotAnkles.style.left = (res.poseLandmarks[29].x * overlay.width + res.poseLandmarks[30].x * overlay.width)/2 + 'px';
+
+        // alignment test
+        if(noseY < sliceY(1) && heelsY > sliceY(7)){
+          if(!aligned){
+            aligned = true;
+            // auto‑snap
+            countdown(5,
+              s=> countdownEl.textContent = s>0?`📸 snapping in ${s}…`:'',
+              ()=>{
+                countdownEl.textContent='';
+                snapPhoto();
+              }
+            );
+          }
+        } else {
+          aligned = false;
+        }
+      });
+
+      const camera = new Camera(video, {
+        onFrame: async ()=> await pose.send({image:video}),
+        width:overlay.width, height:overlay.height
+      });
+      camera.start();
+    }
+  </script>
 </body>
 </html>
