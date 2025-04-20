@@ -5,242 +5,253 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Smart Auto‑Crop Aramandi</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: sans-serif;
-      color: #333;
-      text-align: center;
-      padding: 1em;
-    }
-    h1 { margin-bottom: .2em; }
-    p { margin-bottom: 1em; }
+    body { font-family:sans-serif; text-align:center; margin:0; padding:1em; background:#f7f7f7; }
+    h1 { margin-bottom:0.2em; }
     #camera-container {
-      position: relative;
-      margin: 0 auto;
-      width: 100%;
-      max-width: 400px;
-      aspect-ratio: 9 / 16; /* portrait */
-      background: #000;
-      overflow: hidden;
+      position:relative;
+      display:inline-block;
+      border:6px solid red;
+      max-width:360px;
+      width:100%;
+      aspect-ratio:9/16;
+      background:#000;
+      overflow:hidden;
     }
-    video, canvas, #orange-bar {
-      position: absolute; top: 0; left: 0;
-      width: 100%; height: 100%;
-      object-fit: cover;
+    video, canvas {
+      position:absolute; top:0; left:0;
+      width:100%; height:100%;
+      object-fit:cover;
     }
-    /* thick border */
-    #camera-container.ready { outline: 6px solid lime; }
-    #camera-container.not-ready { outline: 6px solid red; }
-
-    /* orange bar at 7/8 height */
-    #orange-bar {
-      top: calc(7 / 8 * 100%);
-      height: calc(1 / 8 * 100%);
-      background: orange;
-      opacity: .8;
-      pointer-events: none;
-    }
-
-    /* countdown & cues next to video */
     #status {
-      margin-top: 1em;
-      font-size: 1.25em;
-      font-weight: bold;
+      margin-top:.5em;
+      font-size:1.1em;
     }
-
-    .btns {
-      margin-top: 1em;
-      display: flex;
-      gap: .5em;
-      justify-content: center;
-      flex-wrap: wrap;
+    #controls {
+      margin-top:1em;
+      display:flex; justify-content:center; gap:1em;
     }
     button {
-      padding: .6em 1em;
-      font-size: 1em;
-      border: 1px solid #888;
-      background: #fff;
-      border-radius: 4px;
-      cursor: pointer;
+      padding:.5em 1em; font-size:1em;
+      border:1px solid #888; border-radius:4px;
+      background:#fff; cursor:pointer;
     }
-    @media (min-width: 600px) {
-      .btns { flex-direction: column; position: absolute; top: 50%; right: -160px; transform: translateY(-50%); }
+    #counter {
+      font-size:2em; font-weight:bold;
+      position:absolute; top:50%; left:50%;
+      transform:translate(-50%,-50%);
+      color:white; text-shadow:0 0 5px black;
+      display:none;
     }
   </style>
 </head>
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Frame your full body—once your head clears the top line and feet land on the orange bar, we’ll auto‑capture.</p>
+  <p id="instructions">Frame your full body—clear the top slice with your head and land your feet on the orange bar to auto‑capture.</p>
 
-  <div id="camera-container" class="not-ready">
+  <div id="camera-container">
     <video id="video" autoplay playsinline></video>
     <canvas id="overlay"></canvas>
-    <div id="orange-bar"></div>
+    <div id="counter">5</div>
   </div>
-
   <div id="status">Initializing…</div>
-  <div class="btns">
-    <button id="manual-capture">📸 Capture Manually</button>
-    <button id="reset">🔄 Reset</button>
+
+  <div id="controls">
+    <button id="btn-reset">🔄 Reset</button>
+    <button id="btn-capture">📸 Manual Capture</button>
+    <button id="btn-record">🎥 10 s Record</button>
   </div>
 
-  <!-- load MediaPipe Pose -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-  <script>
+  <script type="module">
+    import { Pose } from 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js';
+    import { Camera } from 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.4/camera_utils.js';
+
     const video = document.getElementById('video');
     const overlay = document.getElementById('overlay');
     const ctx     = overlay.getContext('2d');
-    const container = document.getElementById('camera-container');
     const status  = document.getElementById('status');
-    const btnCap  = document.getElementById('manual-capture');
-    const btnReset= document.getElementById('reset');
+    const counter = document.getElementById('counter');
+    const container = document.getElementById('camera-container');
     let capturing = false;
 
-    // start camera
-    navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user' }, audio: false
-    }).then(stream => {
-      video.srcObject = stream;
-    }).catch(err => {
-      status.textContent = '❌ Camera access denied';
-      console.error(err);
+    // set up MediaPipe Pose
+    const pose = new Pose({
+      locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${f}`
+    });
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+    pose.onResults(onPoseResults);
+
+    // camera helper
+    new Camera(video, {
+      onFrame: async () => {
+        await pose.send({image:video});
+      },
+      width:640, height:1136
+    }).start();
+
+    // resize overlay to match video
+    video.addEventListener('loadedmetadata', ()=>{
+      overlay.width = video.videoWidth;
+      overlay.height= video.videoHeight;
     });
 
-    video.addEventListener('loadedmetadata', () => {
-      overlay.width  = video.videoWidth;
-      overlay.height = video.videoHeight;
-      initPose();
-    });
-
-    // draw 8 dashed yellow lines
+    // draw all the guides
     function drawGuides(color) {
       const W = overlay.width, H = overlay.height;
       ctx.clearRect(0,0,W,H);
+
+      // border
+      container.style.borderColor = color;
+
+      // 8 equal slices
+      const seg = H/8;
+      ctx.strokeStyle = color==='lime' ? 'lime' : 'yellow';
       ctx.lineWidth = 2;
-      ctx.strokeStyle = color;
       ctx.setLineDash([6,4]);
       for(let i=1; i<8; i++){
-        const y = H * (i/8);
         ctx.beginPath();
-        ctx.moveTo(0,y);
-        ctx.lineTo(W,y);
+        ctx.moveTo(0, seg*i);
+        ctx.lineTo(W, seg*i);
         ctx.stroke();
       }
       ctx.setLineDash([]);
+
+      // orange bar at 8th slice
+      ctx.fillStyle = 'orange';
+      ctx.fillRect(0, seg*7, W, seg*0.3);
     }
 
-    // MediaPipe Pose setup
-    function initPose() {
-      const pose = new Pose.Pose({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-      });
-      pose.setOptions({
-        modelComplexity: 0,
-        smoothLandmarks: true,
-        enableSegmentation: false,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
-      pose.onResults(onPoseResults);
-
-      // camera utils
-      const camera = new CameraUtils.Camera(video, {
-        onFrame: async () => {
-          await pose.send({image: video});
-        },
-        width: 640, height: 480
-      });
-      camera.start();
-    }
-
+    // main pose callback
     function onPoseResults(results) {
-      if (!results.poseLandmarks) {
+      if (!overlay.width) return;  // not ready yet
+      const lm = results.poseLandmarks;
+      drawGuides(capturing? 'lime' : 'red');
+
+      if (!lm) {
         status.textContent = '❌ No body detected';
-        container.className = 'not-ready';
-        drawGuides('red');
         return;
       }
-      const lm = results.poseLandmarks;
-      const h = overlay.height, w = overlay.width;
 
-      // forehead approx: midpoint between eyes, up by (noseY - eyeY)
-      const eyeL = lm[Pose.PoseLandmark.LEFT_EYE_INNER];
-      const eyeR = lm[Pose.PoseLandmark.RIGHT_EYE_INNER];
-      const nose  = lm[Pose.PoseLandmark.NOSE];
-      const eyeX = (eyeL.x + eyeR.x)/2, eyeY = (eyeL.y + eyeR.y)/2;
-      const dY   = nose.y - eyeY;
+      // compute y of forehead via eye inner & nose
+      const L = lm[Pose.PoseLandmark.LEFT_EYE_INNER];
+      const R = lm[Pose.PoseLandmark.RIGHT_EYE_INNER];
+      const N = lm[Pose.PoseLandmark.NOSE];
+      const eyeY = (L.y+R.y)/2;
+      const dY   = N.y - eyeY;
       const fhY  = eyeY - dY;
 
-      // feet: use both heels
-      const heelL = lm[Pose.PoseLandmark.LEFT_HEEL];
-      const heelR = lm[Pose.PoseLandmark.RIGHT_HEEL];
-      const footY = Math.max(heelL.y, heelR.y);
+      // foot Y = max heel
+      const HL = lm[Pose.PoseLandmark.LEFT_HEEL].y;
+      const HR = lm[Pose.PoseLandmark.RIGHT_HEEL].y;
+      const ftY = Math.max(HL,HR);
 
-      // convert to pixel coords
-      const pixelHead = fhY * h;
-      const pixelFoot = footY * h;
+      // full-body span test
+      const span = ftY - fhY;
+      if (span < 0.6) {
+        status.textContent = '❗ Please step back so your full body fits';
+        capturing = false;
+        return;
+      }
 
-      // top slice = 1/8*h, bottom orange bar at 7/8*h
-      const topSlice = h/8;
-      const orangeY  = 7*h/8;
+      // pixel positions
+      const pixelHead = fhY * overlay.height;
+      const pixelFoot = ftY * overlay.height;
+      const topSlice  = overlay.height / 8;
+      const barTop    = overlay.height * 7/8;
 
-      // check alignment
+      // alignment logic
       const headClear = pixelHead < topSlice;
-      const feetOnBar = pixelFoot > orangeY && pixelFoot < h;
+      const feetOnBar = pixelFoot > barTop && pixelFoot < overlay.height;
 
       if (headClear && feetOnBar) {
-        container.className = 'ready';
-        drawGuides('lime');
-        status.textContent = '✅ Aligned! Capturing in 5…';
-        if (!capturing) autoCaptureCountdown();
+        status.textContent = '✅ Aligned! Capturing in 5 s…';
+        if (!capturing) startAutoCapture();
       } else {
-        container.className = 'not-ready';
-        drawGuides('red');
-        status.textContent = '❗ Align head above top line, feet on orange bar';
+        capturing = false;
+        status.textContent = headClear
+          ? '❗ Move your feet onto the orange bar'
+          : '❗ Lift your head above the top line';
       }
     }
 
-    // auto‐capture sequence
-    function autoCaptureCountdown() {
+    // countdown + auto‑capture
+    function startAutoCapture() {
       capturing = true;
-      let s = 5;
+      let t=5;
+      counter.style.display='block';
+      counter.textContent = t;
       const iv = setInterval(()=>{
-        status.textContent = `✅ Aligned! Capturing in ${s--}…`;
-        if (s < 0) {
+        t--;
+        counter.textContent = t>0?t:'';
+        if (t<=0) {
           clearInterval(iv);
-          capturePhoto();
+          counter.style.display='none';
+          doCapture();
         }
       },1000);
     }
 
-    // manual capture
-    btnCap.addEventListener('click', ()=>{
-      if (capturing) return;
-      capturePhoto();
-    });
-
-    function capturePhoto() {
+    // snapshot
+    function doCapture() {
       const c = document.createElement('canvas');
-      c.width = video.videoWidth;
-      c.height= video.videoHeight;
+      c.width  = video.videoWidth;
+      c.height = video.videoHeight;
       c.getContext('2d').drawImage(video,0,0);
-      c.toBlob(blob=>{
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'aramandi.png';
+      c.toBlob(b=>{
+        const a=document.createElement('a');
+        a.href=URL.createObjectURL(b);
+        a.download='aramandi.png';
         a.click();
-        URL.revokeObjectURL(a.href);
       }, 'image/png');
-      status.textContent = '📸 Photo saved! Tap Reset to try again.';
-      capturing = false;
     }
 
-    btnReset.addEventListener('click', ()=>{
+    // manual capture button
+    document.getElementById('btn-capture').onclick = ()=>{
+      if (capturing) return;
+      status.textContent = '📸 Manual capture in 5 s…';
+      startAutoCapture();
+    };
+
+    // reset alignment
+    document.getElementById('btn-reset').onclick = ()=>{
       capturing = false;
-      status.textContent = '❗ Align head above top line, feet on orange bar';
-    });
+      status.textContent = '🔄 Reset — step back into frame';
+    };
+
+    // record 10 s video
+    document.getElementById('btn-record').onclick = ()=>{
+      if (!navigator.mediaDevices || !window.MediaRecorder) {
+        return alert('Recording not supported');
+      }
+      let t=5;
+      counter.style.display='block';
+      counter.textContent = t;
+      const iv = setInterval(()=>{
+        t--;
+        counter.textContent = t>0?t:'';
+        if (t<=0) {
+          clearInterval(iv);
+          counter.style.display='none';
+          const rec = new MediaRecorder(video.srcObject);
+          const chunks=[];
+          rec.ondataavailable = e=>chunks.push(e.data);
+          rec.onstop = ()=>{
+            const b=new Blob(chunks, {type: 'video/webm'});
+            const a=document.createElement('a');
+            a.href=URL.createObjectURL(b);
+            a.download='aramandi.webm';
+            a.click();
+          };
+          rec.start();
+          setTimeout(()=>rec.stop(),10000);
+        }
+      },1000);
+    };
   </script>
 </body>
 </html>
