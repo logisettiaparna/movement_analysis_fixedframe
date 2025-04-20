@@ -5,214 +5,239 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Smart Auto‑Crop Aramandi</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * { box-sizing:border-box; margin:0; padding:0 }
     body {
-      background: #f7f7f7;
-      font-family: sans-serif;
-      color: #333;
-      text-align: center;
-      padding: 1em;
+      background:#f7f7f7;
+      font-family:sans-serif;
+      color:#333;
+      text-align:center;
+      padding:1em;
     }
-    h1 { margin-bottom: 0.2em; }
-    p  { margin-bottom: 1em; }
+    h1 { margin-bottom:.2em }
+    p  { margin-bottom:1em }
     #camera-container {
-      position: relative;
-      margin: 0 auto;
-      width: 100%;
-      max-width: 400px;
-      aspect-ratio: 9/16;
-      background: #000;
-      overflow: hidden;
+      position:relative;
+      margin:0 auto;
+      width:100%; max-width:400px;
+      aspect-ratio:9/16;
+      background:#000;
+      overflow:hidden;
     }
     video, canvas {
-      position: absolute; top: 0; left: 0;
-      width: 100%; height: 100%;
-      object-fit: cover;
+      position:absolute; top:0; left:0;
+      width:100%; height:100%;
+      object-fit:cover;
     }
     .btn-container {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 0.5em;
-      margin-top: 1em;
+      display:flex;
+      flex-wrap:wrap;
+      justify-content:center;
+      gap:.5em;
+      margin-top:1em;
     }
     .btn-container button {
-      flex: 1 1 140px;
-      padding: 0.6em 1em;
-      font-size: 1em;
-      border: 1px solid #888;
-      background: #fff;
-      border-radius: 4px;
-      cursor: pointer;
+      flex:1 1 140px;
+      padding:.6em 1em;
+      font-size:1em;
+      border:1px solid #888;
+      background:#fff;
+      border-radius:4px;
+      cursor:pointer;
     }
-    @media (min-width: 600px) {
+    @media(min-width:600px){
       .btn-container {
-        position: absolute;
-        top: 50%;
-        right: -180px;
-        transform: translateY(-50%);
-        flex-direction: column;
+        position:absolute;
+        top:50%;
+        right:-180px;
+        transform:translateY(-50%);
+        flex-direction:column;
       }
     }
   </style>
 </head>
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Frame your full body in view—when it’s all inside, we’ll auto‑capture after a 5 s countdown.</p>
+  <p>Frame your full body—when your head & feet hit the 1st & 8th slices, we’ll auto‑capture.</p>
 
   <div id="camera-container">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="overlay"></canvas>
   </div>
-
   <div class="btn-container">
-    <button id="record-video-btn">🎥 Record 10 s Video</button>
+    <button id="record-video-btn">🎥 Record 10 s Video</button>
   </div>
 
+  <!-- MediaPipe Pose -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.5/camera_utils.js"></script>
+
   <script>
-    const video = document.getElementById('video');
-    const overlay = document.getElementById('overlay');
-    const ctx     = overlay.getContext('2d');
-    const btnVideo= document.getElementById('record-video-btn');
+  const video   = document.getElementById('video');
+  const overlay = document.getElementById('overlay');
+  const ctx     = overlay.getContext('2d');
+  const btnVid  = document.getElementById('record-video-btn');
 
-    // 1) Grab camera: front‐facing on phones, default on desktop.
-    navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user' },
-      audio: false
-    }).then(s => video.srcObject = s)
-      .catch(err => alert("📷 camera error: "+err));
+  let latestLandmarks = null;
+  let countingDown    = false;
+  let cdSeconds       = 5;
+  let cdInterval      = null;
 
-    // 2) Resize our overlay to match the incoming video resolution.
-    video.addEventListener('loadedmetadata', () => {
-      overlay.width  = video.videoWidth;
-      overlay.height = video.videoHeight;
-    });
+  // 1) start camera
+  navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:false})
+    .then(s=> video.srcObject=s)
+    .catch(e=> alert("Camera error: "+e));
 
-    // 3) Utility: draw full‐frame border + 8 horizontal slices.
-    function drawOverlay(isValid) {
-      const W = overlay.width, H = overlay.height;
-      ctx.clearRect(0,0,W,H);
+  // 2) resize canvas once we know video size
+  video.addEventListener('loadedmetadata', () => {
+    overlay.width  = video.videoWidth;
+    overlay.height = video.videoHeight;
+  });
 
-      // border
-      ctx.lineWidth   = 4;
-      ctx.strokeStyle = isValid ? 'lime' : 'red';
-      ctx.strokeRect(0,0,W,H);
+  // 3) set up MediaPipe Pose
+  const pose = new Pose.Pose({
+    locateFile: file=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}`
+  });
+  pose.setOptions({
+    modelComplexity: 1,
+    smoothLandmarks: true,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
+  });
+  pose.onResults(r=> {
+    latestLandmarks = r.poseLandmarks;
+  });
 
-      // 8‑head slices
-      const seg = H/8;
-      ctx.lineWidth   = 2;
-      ctx.strokeStyle = 'yellow';
-      ctx.setLineDash([5,3]);
-      ctx.font        = '20px sans-serif';
-      ctx.fillStyle   = 'yellow';
-      ctx.textAlign   = 'left';
-      for(let i=1; i<8; i++){
-        const y = seg*i;
-        ctx.beginPath();
-        ctx.moveTo(0,y);
-        ctx.lineTo(W,y);
-        ctx.stroke();
-        ctx.fillText(i, 10, y-5);
+  const camera = new Camera.Camera(video, {
+    onFrame: async ()=> await pose.send({image:video}),
+    width: 1280, height: 720
+  });
+  camera.start();
+
+  // 4) draw 8 slices + border
+  function drawOverlay(isValid){
+    const W = overlay.width, H = overlay.height;
+    ctx.clearRect(0,0,W,H);
+
+    // border
+    ctx.lineWidth   = 4;
+    ctx.strokeStyle = isValid?'lime':'red';
+    ctx.strokeRect(0,0,W,H);
+
+    // slices
+    const seg = H/8;
+    ctx.lineWidth   = 2;
+    ctx.strokeStyle = isValid?'lime':'red';
+    ctx.setLineDash([5,3]);
+    ctx.font        = '20px sans-serif';
+    ctx.fillStyle   = isValid?'lime':'red';
+    ctx.textAlign   = 'left';
+    for(let i=1;i<8;i++){
+      const y = seg*i;
+      ctx.beginPath();
+      ctx.moveTo(0,y);
+      ctx.lineTo(W,y);
+      ctx.stroke();
+      ctx.fillText(i,10,y-5);
+    }
+    ctx.setLineDash([]);
+  }
+
+  // 5) validation: forehead above slice 1 & feet below slice 8
+  function checkValid(){
+    if(!latestLandmarks) return false;
+    const H = overlay.height;
+    // nose tip
+    const nose = latestLandmarks[0];
+    // approximate forehead: take the midpoint of the eyes and raise by same eye->nose distance
+    const leftEye  = latestLandmarks[1];  // inner eye
+    const rightEye = latestLandmarks[4];
+    const eyeY     = (leftEye.y+rightEye.y)/2;
+    const noseY    = nose.y;
+    const offset   = noseY - eyeY;
+    const foreheadY = eyeY - offset;
+
+    // feet: use left & right heel
+    const lh = latestLandmarks[28], rh = latestLandmarks[27];
+    const footMidY = Math.max(lh.y, rh.y);
+
+    // convert to pixels
+    const fy = foreheadY*H;
+    const ny = noseY*H;
+    const fy2= noseY*H; // we don't draw chin so just ensure nose is inside
+    const fm = footMidY*H;
+
+    const topOK    = fy  < H/8;
+    const bottomOK = fm > 7*H/8;
+    return topOK && bottomOK;
+  }
+
+  // 6) countdown & capture
+  function startCountdown(){
+    countingDown = true;
+    cdSeconds    = 5;
+    cdInterval   = setInterval(()=>{
+      if(!checkValid()){
+        clearInterval(cdInterval);
+        countingDown=false;
+        return;
       }
-      ctx.setLineDash([]);
-    }
-
-    // 4) Replace this stub with your real body‐in‐frame check.
-    //    Should return true only when head‐to‐toe all inside the green box.
-    function checkValid(){
-      // e.g. test that a mediapipe‐detected foot/forehead lie inside margin…
-      // For now we always return true so you can see the countdown working.
-      return true;
-    }
-
-    // auto‑capture state
-    let wasValid      = false;
-    let countingDown  = false;
-    let cdSeconds     = 5;
-    let cdInterval    = null;
-
-    function startCountdown(){
-      countingDown = true;
-      cdSeconds    = 5;
-      cdInterval   = setInterval(()=>{
-        if(!wasValid){
-          // you moved out—abort
-          stopCountdown();
-          return;
-        }
-        // draw the number
-        drawOverlay(true);
-        ctx.fillStyle   = 'rgba(0,0,0,0.5)';
-        ctx.fillRect(0,0,overlay.width, overlay.height);
-        ctx.fillStyle   = 'white';
-        ctx.font        = 'bold 120px sans-serif';
-        ctx.textAlign   = 'center';
-        ctx.fillText( cdSeconds>0 ? cdSeconds : '', overlay.width/2, overlay.height/2 );
-        if(--cdSeconds < 0){
-          clearInterval(cdInterval);
-          capturePhoto();
-          countingDown = false;
-        }
-      }, 1000);
-    }
-
-    function stopCountdown(){
-      clearInterval(cdInterval);
-      countingDown = false;
-    }
-
-    // snapshot out to PNG download
-    function capturePhoto(){
-      const c = document.createElement('canvas');
-      c.width  = video.videoWidth;
-      c.height = video.videoHeight;
-      c.getContext('2d').drawImage(video,0,0);
-      c.toBlob(blob=>{
-        const a = document.createElement('a');
-        a.href        = URL.createObjectURL(blob);
-        a.download    = 'aramandi.png';
-        a.click();
-        URL.revokeObjectURL(a.href);
-      }, 'image/png');
-    }
-
-    // optional: 10s video recorder
-    btnVideo.addEventListener('click', ()=>{
-      if(!window.MediaRecorder) return alert("MediaRecorder unavailable");
-      const stream = video.srcObject;
-      const rec    = new MediaRecorder(stream, {mimeType:'video/webm'});
-      let chunks   = [];
-      rec.ondataavailable = e=>chunks.push(e.data);
-      rec.onstop = ()=>{
-        const blob = new Blob(chunks, {type:'video/webm'});
-        const a    = document.createElement('a');
-        a.href     = URL.createObjectURL(blob);
-        a.download = 'aramandi.webm';
-        a.click();
-        URL.revokeObjectURL(a.href);
-      };
-      rec.start();
-      setTimeout(()=>rec.state==='recording' && rec.stop(), 10000);
-    });
-
-    // 5) Main loop: draw overlay, watch valid→invalid transitions
-    function loop(){
-      wasValid = checkValid();
-      drawOverlay(wasValid);
-
-      // if just flipped true and we're not already counting → start
-      if(wasValid && !countingDown){
-        startCountdown();
+      // show countdown overlay
+      drawOverlay(true);
+      ctx.fillStyle   = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(0,0,overlay.width,overlay.height);
+      ctx.fillStyle   = 'white';
+      ctx.font        = 'bold 100px sans-serif';
+      ctx.textAlign   = 'center';
+      ctx.fillText(cdSeconds>0?cdSeconds:'', overlay.width/2, overlay.height/2);
+      if(--cdSeconds<0){
+        clearInterval(cdInterval);
+        capturePhoto();
+        countingDown=false;
       }
-      // if we drop out during a countdown → abort
-      if(!wasValid && countingDown){
-        stopCountdown();
-      }
+    },1000);
+  }
 
-      requestAnimationFrame(loop);
-    }
+  function capturePhoto(){
+    const c = document.createElement('canvas');
+    c.width  = video.videoWidth;
+    c.height = video.videoHeight;
+    c.getContext('2d').drawImage(video,0,0);
+    c.toBlob(blob=>{
+      const a = document.createElement('a');
+      a.href     = URL.createObjectURL(blob);
+      a.download = 'aramandi.png';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    },'image/png');
+  }
 
-    video.addEventListener('play', loop);
+  // 7) optional 10 s video
+  btnVid.addEventListener('click',()=>{
+    if(!window.MediaRecorder) return alert('MediaRecorder unsupported');
+    const rec = new MediaRecorder(video.srcObject, {mimeType:'video/webm'});
+    let chunks=[];
+    rec.ondataavailable = e=>chunks.push(e.data);
+    rec.onstop = ()=>{
+      const blob=new Blob(chunks,{type:'video/webm'});
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download='aramandi.webm';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    };
+    rec.start();
+    setTimeout(()=>rec.state==='recording'&&rec.stop(),10000);
+  });
+
+  // 8) main loop
+  function loop(){
+    const ok = checkValid();
+    if(ok && !countingDown)   startCountdown();
+    if(!ok && countingDown)   { clearInterval(cdInterval); countingDown=false; }
+    drawOverlay(ok);
+    requestAnimationFrame(loop);
+  }
+  video.addEventListener('play',loop);
   </script>
 </body>
 </html>
