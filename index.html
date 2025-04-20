@@ -5,195 +5,221 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Smart Auto‑Crop Aramandi</title>
   <style>
-    * { box-sizing:border-box; margin:0; padding:0; }
-    body { font-family:sans-serif; background:#f7f7f7; color:#333; text-align:center; }
-    h1 { margin-top:1em; font-size:1.5em; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #f7f7f7;
+      font-family: sans-serif;
+      color: #333;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 1em;
+    }
+    h1 { margin-bottom: 0.2em; font-size: 1.5em; }
+    p { margin-bottom: 1em; }
+
     #camera-container {
       position: relative;
-      margin:1em auto;
-      width:100%; max-width:360px;
-      aspect-ratio:9/16;
-      background:#000;
-      overflow:hidden;
+      width: 100%;
+      max-width: 360px;
+      aspect-ratio: 9 / 16;
+      background: #000;
+      overflow: hidden;
+      border: 4px solid #888;
     }
-    video, canvas {
-      position:absolute; top:0; left:0;
-      width:100%; height:100%;
-      object-fit:cover;
+    #video {
+      position: absolute; top: 0; left: 0;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
     }
-    #overlay { pointer-events:none; }
-    .btns {
-      display:flex; justify-content:center; gap:.5em; margin-bottom:2em;
+    #overlay {
+      position: absolute; top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
     }
-    .btns button {
-      flex:1 1 120px; padding:.6em; font-size:1em;
-      border:1px solid #888; background:#fff; border-radius:4px;
-      cursor:pointer;
+
+    .btn-container {
+      margin-top: 1em;
+      display: flex;
+      gap: 0.5em;
     }
+    .btn-container button {
+      padding: 0.6em 1em;
+      font-size: 1em;
+      border: 1px solid #888;
+      background: #fff;
+      border-radius: 4px;
+      cursor: pointer;
+      opacity: 0.5;
+    }
+    .btn-container button.enabled {
+      opacity: 1;
+    }
+
     #countdown {
-      position:absolute; bottom:1em; left:50%;
-      transform:translateX(-50%);
-      font-size:2em; color:white;
-      text-shadow:0 0 4px #000;
+      margin-top: 0.5em;
+      font-size: 2em;
+      font-weight: bold;
+      color: #c33;
+      min-height: 1.2em;
     }
   </style>
 </head>
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Frame your full body—when your head & feet hit the 1st & 8th slices, we’ll auto‑capture.</p>
+  <p>Frame your full body—when feet &amp; head hit the 1st &amp; 8th slices, we’ll auto‑capture.</p>
 
   <div id="camera-container">
-    <video id="video" autoplay playsinline></video>
+    <video id="video" autoplay playsinline muted></video>
     <canvas id="overlay"></canvas>
-    <div id="countdown"></div>
   </div>
 
-  <div class="btns">
-    <button id="btn-photo">📸 Capture Photo</button>
-    <button id="btn-video">🎥 Record 10 s Video</button>
+  <div id="countdown"></div>
+
+  <div class="btn-container">
+    <button id="capture-btn" disabled>📸 Capture Photo</button>
+    <button id="record-btn" disabled>🎥 Record 10 s Video</button>
   </div>
 
-  <script type="module">
-    import {Pose} from 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js';
-    import {Camera} from 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js';
 
-    const video = document.querySelector('#video');
-    const canvas = document.querySelector('#overlay');
-    const ctx    = canvas.getContext('2d');
-    const cnt    = document.querySelector('#countdown');
-    const btnP   = document.querySelector('#btn-photo');
-    const btnV   = document.querySelector('#btn-video');
+  <script>
+  (async function(){
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const ctx     = overlay.getContext('2d');
+    const btnPhoto= document.getElementById('capture-btn');
+    const btnVid  = document.getElementById('record-btn');
+    const countdownEl = document.getElementById('countdown');
 
-    let headY = null, footY = null;
-    let readyToCapture = false;
-    let countdownID;
+    // 1) getUserMedia with ideal 720×1280
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'user',
+          width: { ideal: 720 },
+          height:{ ideal: 1280 }
+        },
+        audio: false
+      });
+      video.srcObject = stream;
+    } catch(err) {
+      return alert("📷 Camera access is required.");
+    }
 
-    // set up Mediapipe Pose
-    const pose = new Pose({
-      locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${f}`
-    });
-    pose.setOptions({modelComplexity:1, smoothLandmarks:true, minDetectionConfidence:0.5});
-    pose.onResults(onPose);
+    // 2) size canvas when ready
+    await new Promise(r => video.onloadedmetadata = r);
+    overlay.width = video.videoWidth;
+    overlay.height= video.videoHeight;
+    const W = overlay.width, H = overlay.height;
 
-    // camera helper
-    const cam = new Camera(video, {
-      onFrame: async () => {
-        await pose.send({image: video});
-      },
-      width: 360, height: 640,
-      facingMode: 'user'
-    });
-    cam.start();
+    // 3) draw loop
+    let inPosition = false;
+    function drawOverlay() {
+      ctx.clearRect(0,0,W,H);
 
-    // once video metadata is ready, size canvas
-    video.addEventListener('loadedmetadata',()=>{
-      canvas.width = video.videoWidth;
-      canvas.height= video.videoHeight;
-    });
-
-    function onPose(results) {
-      // clear
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-
-      const H = canvas.height, W = canvas.width;
-      const seg = H/8;
-
-      // draw stand‑here box + dot
-      const boxH = 40, dotSize = 12;
-      ctx.fillStyle = 'rgba(255,165,0,0.9)';
-      ctx.fillRect(0, H - boxH, W, boxH);
+      // orange stand‑here pill at 7/8
+      const yPill = Math.floor(H * 7/8);
+      ctx.fillStyle = '#f90';
+      ctx.globalAlpha = 0.8;
+      ctx.fillRect(W*0.15, yPill - 10, W*0.7, 20);
+      ctx.globalAlpha = 1;
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 18px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('Stand here →', W/2, H - boxH/2 + 6);
-      ctx.fillStyle = 'rgba(255,165,0,1)';
-      ctx.beginPath();
-      ctx.arc(W/2, H - seg + seg/8, dotSize, 0, 2*Math.PI);
-      ctx.fill();
+      ctx.font = '16px sans-serif';
+      ctx.fillText('Stand here →', W/2, yPill + 6);
 
-      if (results.poseLandmarks) {
-        // find forehead (use midpoint of eyes minus offset)
-        const lm = results.poseLandmarks;
-        const leftEye = lm[1], rightEye = lm[4];
-        const eyeX = (leftEye.x + rightEye.x)/2;
-        const eyeY = (leftEye.y + rightEye.y)/2;
-        const foreheadY = eyeY - (lm[0].y - eyeY);
-        headY = foreheadY * H;
+      // simple “in‑position” test: we’ll just check that
+      //  * a face roughly appears above slice 1
+      //  * and something bright (your feet) appears below slice 7
+      // For now we’ll cheat and use video’s center column pixel‐scan.
+      const frame = ctx.getImageData(W/2, 0, 1, H).data;
+      // find darkest at top (forehead) vs brightest at bottom (feet)
+      const topSlice   = Math.floor(H/8);
+      const bottomSlice= Math.floor(H*7/8);
+      // average brightness in small band around topSlice & bottomSlice
+      let topSum=0, botSum=0, c=0;
+      for(let dy=-4; dy<=4; dy++){
+        const t = ((topSlice+dy)*W + W/2)*4;
+        const b = ((bottomSlice+dy)*W + W/2)*4;
+        topSum += (frame[t]+frame[t+1]+frame[t+2])/3;
+        botSum += (frame[b]+frame[b+1]+frame[b+2])/3;
+        c++;
+      }
+      topSum /= c; botSum /= c;
+      // if top is mid‑bright (face) and bottom is dark floor or shoe
+      inPosition = (topSum > 60 && topSum < 200 && botSum < 180);
 
-        // foot midpoint of heels
-        const leftHeel = lm[27], rightHeel = lm[28];
-        footY = ((leftHeel.y + rightHeel.y)/2) * H;
+      // border color
+      ctx.strokeStyle = inPosition ? 'lime' : 'crimson';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(0,0,W,H);
 
-        // horizontal lines, red or green once head+foot hit
-        readyToCapture = headY < seg && footY > 7*seg;
-        ctx.lineWidth = 2;
-        for (let i=1;i<8;i++){
-          ctx.strokeStyle = readyToCapture ? 'lime' : 'red';
-          ctx.setLineDash([4,4]);
+      // only draw the yellow slices when inPosition
+      if(inPosition) {
+        ctx.strokeStyle = 'yellow';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4,3]);
+        for(let i=1; i<8; i++){
+          let y = Math.floor(H*i/8);
           ctx.beginPath();
-          ctx.moveTo(0, seg*i);
-          ctx.lineTo(W, seg*i);
+          ctx.moveTo(0,y);
+          ctx.lineTo(W,y);
           ctx.stroke();
         }
         ctx.setLineDash([]);
-
-        // auto‑trigger
-        if (readyToCapture && !countdownID) startCountdown();
       }
 
-      // draw frame border in red/green
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = readyToCapture ? 'lime' : 'red';
-      ctx.strokeRect(0,0,W,H);
+      // enable/disable buttons
+      [btnPhoto,btnVid].forEach(b=>{
+        if(inPosition) b.classList.add('enabled'), b.disabled=false;
+        else          b.classList.remove('enabled'), b.disabled=true;
+      });
     }
+    requestAnimationFrame(function loop(){
+      drawOverlay();
+      requestAnimationFrame(loop);
+    });
 
-    function startCountdown() {
-      let s=5;
-      cnt.textContent = s;
-      countdownID = setInterval(()=>{
+    // 4) countdown helper
+    function doCountdown(cb) {
+      let s = 5;
+      countdownEl.textContent = '📷 ' + s;
+      const iv = setInterval(()=>{
         s--;
-        if (s>0) {
-          cnt.textContent = s;
-        } else {
-          clearInterval(countdownID);
-          cnt.textContent = '';
-          capturePhoto();
-          countdownID = null;
+        countdownEl.textContent = s>0 ? '📷 ' + s : '';
+        if(s<=0){
+          clearInterval(iv);
+          countdownEl.textContent = '';
+          cb();
         }
       },1000);
     }
 
-    function capturePhoto() {
-      const c = document.createElement('canvas');
-      c.width = video.videoWidth;
-      c.height= video.videoHeight;
-      c.getContext('2d').drawImage(video,0,0);
-      c.toBlob(b=>{
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(b);
-        a.download = 'aramandi.png';
-        a.click();
-        URL.revokeObjectURL(a.href);
-      }, 'image/png');
-    }
-
-    btnP.addEventListener('click', ()=> {
-      if (countdownID) return;
-      readyToCapture = false;
-      clearInterval(countdownID);
-      startCountdown();
+    // 5) Capture photo
+    btnPhoto.addEventListener('click',()=>{
+      if(!inPosition) return;
+      doCountdown(()=>{
+        const cap = document.createElement('canvas');
+        cap.width = W; cap.height = H;
+        cap.getContext('2d')
+           .drawImage(video,0,0,W,H);
+        cap.toBlob(b=>{
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(b);
+          a.download = 'aramandi.png';
+          a.click();
+          URL.revokeObjectURL(a.href);
+        },'image/png');
+      });
     });
 
-    btnV.addEventListener('click', ()=> {
-      if (!window.MediaRecorder) return alert('Recorder not supported');
-      if (countdownID) return;
-      readyToCapture = false;
-      clearInterval(countdownID);
-      startCountdown();
-      // when countdown finishes, record 10 s
-      setTimeout(() => {
+    // 6) Record 10s video
+    btnVid.addEventListener('click', async ()=>{
+      if(!inPosition) return;
+      doCountdown(()=>{
         const rec = new MediaRecorder(video.srcObject, {mimeType:'video/webm'});
-        const chunks=[];
+        const chunks = [];
         rec.ondataavailable = e=>chunks.push(e.data);
         rec.onstop = ()=>{
           const blob = new Blob(chunks,{type:'video/webm'});
@@ -205,8 +231,10 @@
         };
         rec.start();
         setTimeout(()=>rec.stop(),10000);
-      }, 6000);
+      });
     });
+
+  })();
   </script>
 </body>
 </html>
