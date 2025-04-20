@@ -1,35 +1,45 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Smart Auto‑Crop Aramandi</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: sans-serif; text-align:center; padding:1em; }
-    h1 { margin-bottom:.2em; }
-    p { margin-bottom:1em; }
+    * { box-sizing:border-box; margin:0; padding:0 }
+    body { font-family:sans-serif; text-align:center; padding:1em; background:#f7f7f7 }
+    h1 { margin-bottom:.3em }
     #camera-container {
-      position: relative;
-      margin: 0 auto;
-      width: 100%; max-width: 360px;
-      aspect-ratio: 9 / 16;
-      background: #000;
-      overflow: hidden;
+      position:relative;
+      margin:0 auto;
+      max-width:360px;
+      width:100%;
+      aspect-ratio:9/16;
+      background:#000;
+      overflow:hidden;
+      border:6px solid red;
     }
     video, canvas {
-      position: absolute; top:0; left:0;
+      position:absolute; top:0; left:0;
       width:100%; height:100%;
-      object-fit: cover;
+      object-fit:cover;
+    }
+    #counter {
+      position:absolute;
+      top:50%; left:50%;
+      transform:translate(-50%,-50%);
+      font-size:4rem;
+      color:#fff;
+      text-shadow:0 0 10px #000;
+      display:none;
     }
     #controls {
       margin-top:1em;
-      display:flex; gap:.5em; justify-content:center;
+      display:flex; justify-content:center; gap:.5em;
     }
     #controls button {
-      padding:.6em 1em;
-      font-size:1em;
-      border:1px solid #666;
+      padding:.8em 1.2em;
+      font-size:1rem;
+      border:2px solid #666;
       background:#fff;
       border-radius:4px;
       cursor:pointer;
@@ -38,128 +48,154 @@
 </head>
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Once your <strong>head</strong> clears the top slice and your <strong>feet</strong> land on the orange bar, we’ll auto‑capture.</p>
+  <p>Clear the top slice with your head and land your feet on the orange bar to auto‑capture.</p>
+
   <div id="camera-container">
-    <video id="video" playsinline autoplay muted></video>
+    <video id="video" autoplay playsinline muted></video>
     <canvas id="overlay"></canvas>
+    <div id="counter">5</div>
   </div>
+
   <div id="controls">
     <button id="reset">🔄 Reset</button>
   </div>
 
-  <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('overlay');
-    const ctx    = canvas.getContext('2d');
-    const reset  = document.getElementById('reset');
+  <script type="module">
+    import { Pose } from 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js';
+    import { Camera } from 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.4/camera_utils.js';
 
-    let W, H, seg, capturing=false;
+    const video    = document.getElementById('video');
+    const canvas   = document.getElementById('overlay');
+    const ctx      = canvas.getContext('2d');
+    const counter  = document.getElementById('counter');
+    const resetBtn = document.getElementById('reset');
+    let W, H, seg;
+    let aligned = false, capturing = false;
 
-    // 1) Ask for camera
-    async function startCamera(){
+    // 1. Start camera
+    async function initCamera() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user' }, audio:false
-        });
+        const stream = await navigator.mediaDevices.getUserMedia({ video:{facingMode:'user'}, audio:false });
         video.srcObject = stream;
-      } catch(err){
-        alert('🚫 Camera access denied');
+      } catch {
+        alert('🚫 Camera access is required');
       }
     }
 
-    // 2) Once we know video size, set canvas
-    video.addEventListener('loadedmetadata', ()=>{
-      W = video.videoWidth;
-      H = video.videoHeight;
-      canvas.width  = W;
-      canvas.height = H;
+    // 2. When video ready, size canvas and slices
+    video.addEventListener('loadedmetadata', () => {
+      W = video.videoWidth; H = video.videoHeight;
+      canvas.width = W; canvas.height = H;
       seg = H/8;
-      requestAnimationFrame(drawLoop);
+      requestAnimationFrame(drawGuides);
     });
 
-    function drawLoop(){
+    // 3. Draw slices, bar, border
+    function drawGuides(){
       ctx.clearRect(0,0,W,H);
-
-      // draw border
-      ctx.lineWidth = 6;
-      ctx.strokeStyle = isAligned ? 'lime' : 'red';
-      ctx.strokeRect(0,0,W,H);
-
+      // border
+      canvas.parentElement.style.borderColor = aligned? 'lime':'red';
       // dashed yellow slices
-      ctx.strokeStyle = 'yellow';
-      ctx.lineWidth   = 3;
-      ctx.setLineDash([8,4]);
+      ctx.strokeStyle = 'yellow'; ctx.lineWidth=3; ctx.setLineDash([8,4]);
       for(let i=1;i<8;i++){
-        let y = seg*i;
         ctx.beginPath();
-        ctx.moveTo(0,y);
-        ctx.lineTo(W,y);
+        ctx.moveTo(0,seg*i);
+        ctx.lineTo(W,seg*i);
         ctx.stroke();
       }
       ctx.setLineDash([]);
-
-      // orange bar at bottom slice
-      ctx.fillStyle = 'orange';
-      ctx.fillRect(0, seg*7 - 4, W, 8);
-
-      requestAnimationFrame(drawLoop);
+      // orange bar
+      ctx.fillStyle='orange';
+      ctx.fillRect(0, seg*7 -4, W, 8);
+      requestAnimationFrame(drawGuides);
     }
 
-    // 3) Simple pose‑based validation stub: checks
-    //    forehead above slice#1, heels on orange bar.
-    let isAligned = false;
-    async function checkAlignment(){
-      // placeholder: a real pose‑detector would go here
-      // For now we’ll just flip to true if user clicks reset
-      isAligned = false;
-    }
-    reset.addEventListener('click', ()=>{ isAligned=false; });
+    // 4. Setup MediaPipe Pose
+    const pose = new Pose({
+      locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${f}`
+    });
+    pose.setOptions({
+      modelComplexity:1,
+      smoothLandmarks:true,
+      minDetectionConfidence:0.5,
+      minTrackingConfidence:0.5
+    });
+    pose.onResults(onPoseResults);
 
-    // 4) Countdown & auto‑capture when aligned
-    let countdownInterval;
-    function startCaptureSequence(){
-      if(capturing) return;
-      capturing = true;
-      let count = 5;
-      countdownInterval = setInterval(()=>{
-        // draw big number overlay
-        ctx.fillStyle = 'rgba(0,0,0,0.6)';
-        ctx.fillRect(0,0,W,H);
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 120px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(count>0?count:'', W/2, H/2);
-        if(count-- <= 0){
-          clearInterval(countdownInterval);
-          grabPhoto();
-        }
-      }, 1000);
-    }
+    // 5. Hook camera frames into Pose
+    new Camera(video, {
+      onFrame: async ()=>await pose.send({image:video}),
+      width:W, height:H
+    }).start();
 
-    function grabPhoto(){
-      const out = document.createElement('canvas');
-      out.width  = W; out.height = H;
-      out.getContext('2d').drawImage(video,0,0);
-      out.toBlob(blob=>{
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'aramandi.png';
-        a.click();
-      }, 'image/png');
-    }
+    // 6. Process each Pose result
+    function onPoseResults(res){
+      if (!H) return;              // wait until video size known
+      const lm = res.poseLandmarks;
+      if (!lm || capturing) return;
 
-    // 5) Polling alignment every 200 ms
-    setInterval(()=>{
-      // → replace this with real pose check:
-      // if( pose.foreheadY < seg*1 && both heels around seg*7 )
-      //    isAligned = true & startCaptureSequence()
-      if(isAligned && !capturing){
-        startCaptureSequence();
+      // forehead y via eye‑inner & nose
+      const L = lm[Pose.PoseLandmark.LEFT_EYE_INNER];
+      const R = lm[Pose.PoseLandmark.RIGHT_EYE_INNER];
+      const N = lm[Pose.PoseLandmark.NOSE];
+      const eyeY = (L.y+R.y)/2;
+      const dY   = N.y - eyeY;
+      const fhY  = eyeY - dY;      // normalized
+
+      // heel y
+      const HL = lm[Pose.PoseLandmark.LEFT_HEEL].y;
+      const HR = lm[Pose.PoseLandmark.RIGHT_HEEL].y;
+      const ftY = Math.max(HL,HR);  // normalized
+
+      // align tests
+      const headOK = fhY < 1/8;
+      const feetOK = Math.abs(ftY - 7/8) < 0.03; // within 3%
+
+      if (headOK && feetOK) {
+        aligned = true;
+        startCountdown();
+      } else {
+        aligned = false;
       }
-    }, 200);
+    }
 
-    startCamera();
-    checkAlignment();
+    // 7. Countdown + capture
+    function startCountdown(){
+      capturing = true;
+      let t = 5;
+      counter.style.display='block';
+      counter.textContent = t;
+      const iv = setInterval(()=>{
+        if (--t >= 0) {
+          counter.textContent = t||'';
+        }
+        if (t<0) {
+          clearInterval(iv);
+          counter.style.display='none';
+          takePhoto();
+        }
+      },1000);
+    }
+
+    function takePhoto(){
+      const snap = document.createElement('canvas');
+      snap.width = W; snap.height=H;
+      snap.getContext('2d').drawImage(video,0,0);
+      snap.toBlob(b=>{
+        const a=document.createElement('a');
+        a.href=URL.createObjectURL(b);
+        a.download='aramandi.png';
+        a.click();
+      },'image/png');
+    }
+
+    // 8. Reset
+    resetBtn.onclick = ()=>{
+      aligned = false; capturing=false;
+      counter.style.display='none';
+    };
+
+    initCamera();
   </script>
 </body>
 </html>
