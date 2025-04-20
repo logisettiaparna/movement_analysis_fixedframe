@@ -1,48 +1,38 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Smart Auto‑Crop Aramandi</title>
   <style>
+    /* --- same styles as before --- */
     * { box-sizing:border-box; margin:0; padding:0 }
     body { font-family:sans-serif; text-align:center; padding:1em; background:#f7f7f7 }
     h1 { margin-bottom:.3em }
     #camera-container {
-      position:relative;
-      margin:0 auto;
-      max-width:360px;
-      width:100%;
-      aspect-ratio:9/16;
-      background:#000;
-      overflow:hidden;
+      position:relative; margin:0 auto;
+      max-width:360px; width:100%; aspect-ratio:9/16;
+      background:#000; overflow:hidden;
       border:6px solid red;
     }
     video, canvas {
       position:absolute; top:0; left:0;
-      width:100%; height:100%;
-      object-fit:cover;
+      width:100%; height:100%; object-fit:cover;
     }
     #counter {
-      position:absolute;
-      top:50%; left:50%;
+      position:absolute; top:50%; left:50%;
       transform:translate(-50%,-50%);
-      font-size:4rem;
-      color:#fff;
-      text-shadow:0 0 10px #000;
-      display:none;
+      font-size:4rem; color:#fff;
+      text-shadow:0 0 10px #000; display:none;
     }
     #controls {
-      margin-top:1em;
-      display:flex; justify-content:center; gap:.5em;
+      margin-top:1em; display:flex;
+      justify-content:center; gap:.5em;
     }
     #controls button {
-      padding:.8em 1.2em;
-      font-size:1rem;
-      border:2px solid #666;
-      background:#fff;
-      border-radius:4px;
-      cursor:pointer;
+      padding:.8em 1.2em; font-size:1rem;
+      border:2px solid #666; background:#fff;
+      border-radius:4px; cursor:pointer;
     }
   </style>
 </head>
@@ -55,34 +45,33 @@
     <canvas id="overlay"></canvas>
     <div id="counter">5</div>
   </div>
-
   <div id="controls">
     <button id="reset">🔄 Reset</button>
   </div>
 
+  <!-- 1) Explicit camera‑access prompt -->
+  <script>
+    const video = document.getElementById('video');
+    navigator.mediaDevices.getUserMedia({ video: { facingMode:'user' }, audio:false })
+      .then(stream => { video.srcObject = stream; })
+      .catch(err => {
+        alert('🚫 Camera access is required for this app.');
+        console.error(err);
+      });
+  </script>
+
+  <!-- 2) Now load MediaPipe & the rest of the logic as a module -->
   <script type="module">
     import { Pose } from 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js';
     import { Camera } from 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.4/camera_utils.js';
 
-    const video    = document.getElementById('video');
     const canvas   = document.getElementById('overlay');
     const ctx      = canvas.getContext('2d');
     const counter  = document.getElementById('counter');
     const resetBtn = document.getElementById('reset');
-    let W, H, seg;
-    let aligned = false, capturing = false;
+    let W, H, seg, aligned=false, capturing=false;
 
-    // 1. Start camera
-    async function initCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video:{facingMode:'user'}, audio:false });
-        video.srcObject = stream;
-      } catch {
-        alert('🚫 Camera access is required');
-      }
-    }
-
-    // 2. When video ready, size canvas and slices
+    // 3) When the video metadata arrives, size canvas & start drawing
     video.addEventListener('loadedmetadata', () => {
       W = video.videoWidth; H = video.videoHeight;
       canvas.width = W; canvas.height = H;
@@ -90,68 +79,72 @@
       requestAnimationFrame(drawGuides);
     });
 
-    // 3. Draw slices, bar, border
+    // 4) Draw border, slices, orange bar
     function drawGuides(){
+      // border color
+      document
+        .getElementById('camera-container')
+        .style.borderColor = aligned ? 'lime' : 'red';
       ctx.clearRect(0,0,W,H);
-      // border
-      canvas.parentElement.style.borderColor = aligned? 'lime':'red';
+
       // dashed yellow slices
-      ctx.strokeStyle = 'yellow'; ctx.lineWidth=3; ctx.setLineDash([8,4]);
+      ctx.strokeStyle='yellow'; ctx.lineWidth=3; ctx.setLineDash([8,4]);
       for(let i=1;i<8;i++){
         ctx.beginPath();
-        ctx.moveTo(0,seg*i);
-        ctx.lineTo(W,seg*i);
+        ctx.moveTo(0, seg*i);
+        ctx.lineTo(W, seg*i);
         ctx.stroke();
       }
       ctx.setLineDash([]);
+
       // orange bar
       ctx.fillStyle='orange';
       ctx.fillRect(0, seg*7 -4, W, 8);
+
       requestAnimationFrame(drawGuides);
     }
 
-    // 4. Setup MediaPipe Pose
+    // 5) Set up MediaPipe Pose
     const pose = new Pose({
-      locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${f}`
+      locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${f}`
     });
     pose.setOptions({
-      modelComplexity:1,
-      smoothLandmarks:true,
-      minDetectionConfidence:0.5,
-      minTrackingConfidence:0.5
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
     });
     pose.onResults(onPoseResults);
 
-    // 5. Hook camera frames into Pose
+    // 6) Hook Camera frames into Pose
     new Camera(video, {
-      onFrame: async ()=>await pose.send({image:video}),
-      width:W, height:H
+      onFrame: async () => await pose.send({image: video}),
+      width: 1280, height: 720
     }).start();
 
-    // 6. Process each Pose result
+    // 7) Pose callback: compute alignment
     function onPoseResults(res){
-      if (!H) return;              // wait until video size known
+      if(!res.poseLandmarks || capturing) return;
       const lm = res.poseLandmarks;
-      if (!lm || capturing) return;
 
-      // forehead y via eye‑inner & nose
+      // forehead y = eye‑inner → nose trick
       const L = lm[Pose.PoseLandmark.LEFT_EYE_INNER];
       const R = lm[Pose.PoseLandmark.RIGHT_EYE_INNER];
       const N = lm[Pose.PoseLandmark.NOSE];
-      const eyeY = (L.y+R.y)/2;
+      const eyeY = (L.y + R.y)/2;
       const dY   = N.y - eyeY;
-      const fhY  = eyeY - dY;      // normalized
+      const fhY  = eyeY - dY;           // normalized
 
-      // heel y
+      // heel y (use the lower of the two)
       const HL = lm[Pose.PoseLandmark.LEFT_HEEL].y;
       const HR = lm[Pose.PoseLandmark.RIGHT_HEEL].y;
-      const ftY = Math.max(HL,HR);  // normalized
+      const ftY = Math.max(HL, HR);
 
-      // align tests
-      const headOK = fhY < 1/8;
+      // alignment tests
+      const headOK = fhY < 1/8;             // above top slice
       const feetOK = Math.abs(ftY - 7/8) < 0.03; // within 3%
 
-      if (headOK && feetOK) {
+      if(headOK && feetOK){
         aligned = true;
         startCountdown();
       } else {
@@ -159,43 +152,42 @@
       }
     }
 
-    // 7. Countdown + capture
+    // 8) Countdown & capture
     function startCountdown(){
+      if(capturing) return;
       capturing = true;
       let t = 5;
-      counter.style.display='block';
+      counter.style.display = 'block';
       counter.textContent = t;
       const iv = setInterval(()=>{
-        if (--t >= 0) {
+        if(t-- > 0){
           counter.textContent = t||'';
-        }
-        if (t<0) {
+        } else {
           clearInterval(iv);
           counter.style.display='none';
           takePhoto();
         }
-      },1000);
+      }, 1000);
     }
 
     function takePhoto(){
       const snap = document.createElement('canvas');
-      snap.width = W; snap.height=H;
+      snap.width = W; snap.height = H;
       snap.getContext('2d').drawImage(video,0,0);
-      snap.toBlob(b=>{
-        const a=document.createElement('a');
-        a.href=URL.createObjectURL(b);
-        a.download='aramandi.png';
+      snap.toBlob(blob => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'aramandi.png';
         a.click();
-      },'image/png');
+      }, 'image/png');
     }
 
-    // 8. Reset
-    resetBtn.onclick = ()=>{
-      aligned = false; capturing=false;
-      counter.style.display='none';
+    // 9) Reset button
+    resetBtn.onclick = () => {
+      aligned = false;
+      capturing = false;
+      counter.style.display = 'none';
     };
-
-    initCamera();
   </script>
 </body>
 </html>
