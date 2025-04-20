@@ -76,7 +76,7 @@
 </head>
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Ensure your head clears the top slice and your heels land on the orange bar to auto‑capture.</p>
+  <p>Ensure your forehead clears the top slice and your heels land on the orange bar to auto‑capture.</p>
 
   <div id="container">
     <div id="camera-container">
@@ -87,13 +87,13 @@
 
     <div class="btn-container">
       <button id="capture">📸 Capture</button>
-      <button id="record">🎥 Record 10 s</button>
+      <button id="record">🎥 Record 10 s</button>
       <button id="reset">🔄 Reset</button>
       <div id="countdown"></div>
     </div>
   </div>
 
-  <!-- MediaPipe Scripts -->
+  <!-- MediaPipe -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
   <script>
@@ -109,7 +109,6 @@
     let lastResults    = null;
     let autoCapturing  = false;
 
-    // 1) prompt for camera
     async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -122,14 +121,12 @@
       }
     }
 
-    // 2) size overlay once video ready
     video.addEventListener('loadedmetadata', () => {
       overlay.width  = video.videoWidth;
       overlay.height = video.videoHeight;
       drawFrame(false);
     });
 
-    // 3) draw border + 8 slices
     function drawFrame(valid) {
       const W = overlay.width, H = overlay.height;
       ctx.clearRect(0,0,W,H);
@@ -154,29 +151,32 @@
       ctx.setLineDash([]);
     }
 
-    // 4) check pose: nose above top slice, heels on orange bar
     function checkValidPose() {
       if (!lastResults || !lastResults.poseLandmarks) return false;
       const lm   = lastResults.poseLandmarks;
       const H    = overlay.height;
       const seg  = H/8;
 
-      // nose tip = landmark 0
-      const noseY = lm[0].y * H;
+      // forehead proxy: eye midpoint +/- offset
+      const leY = lm[Pose.PoseLandmark.LEFT_EYE_INNER].y * H;
+      const reY = lm[Pose.PoseLandmark.RIGHT_EYE_INNER].y * H;
+      const noY = lm[Pose.PoseLandmark.NOSE].y * H;
+      const eyeY = (leY + reY)/2;
+      const foreheadY = eyeY - (noY - eyeY);
 
-      // heel landmarks
-      const L = lm[Pose.PoseLandmark.LEFT_HEEL];
-      const R = lm[Pose.PoseLandmark.RIGHT_HEEL];
+      // heel midpoint
+      const L = lm[Pose.PoseLandmark.LEFT_HEEL],
+            R = lm[Pose.PoseLandmark.RIGHT_HEEL];
       const heelY = ((L.y + R.y)/2) * H;
 
-      const headAbove = noseY < seg;
-      // allow ±20% of slice for feet
-      const footOn    = Math.abs(heelY - 7*seg) < 0.2*seg;
+      // 1. forehead above 1.1*seg
+      const headAbove = foreheadY < (1.1 * seg);
+      // 2. heel within ±30% of bottom slice
+      const footOn    = Math.abs(heelY - 7*seg) < 0.3 * seg;
 
       return headAbove && footOn;
     }
 
-    // 5) countdown helper
     function startCountdown(onDone) {
       let s = 5;
       countdownD.textContent = s;
@@ -191,7 +191,6 @@
       },1000);
     }
 
-    // 6) photo capture
     function doPhotoCapture() {
       const c = document.createElement('canvas');
       c.width  = video.videoWidth;
@@ -205,11 +204,8 @@
       }, 'image/png');
     }
 
-    // 7) video capture
     function doVideoCapture() {
-      if (!window.MediaRecorder) {
-        return alert('MediaRecorder unsupported');
-      }
+      if (!window.MediaRecorder) return alert('MediaRecorder not supported.');
       const stream = video.srcObject;
       const rec    = new MediaRecorder(stream, { mimeType:'video/webm' });
       const chunks = [];
@@ -225,7 +221,6 @@
       setTimeout(()=>rec.state!=='inactive'&&rec.stop(),10000);
     }
 
-    // 8) Reset
     function resetAll() {
       if (countdownTimer) clearInterval(countdownTimer);
       countdownTimer = null;
@@ -235,7 +230,6 @@
     }
     btnReset.addEventListener('click', resetAll);
 
-    // 9) Manual controls
     btnCapture.addEventListener('click', () => {
       if (countdownTimer) return;
       startCountdown(doPhotoCapture);
@@ -245,7 +239,6 @@
       startCountdown(doVideoCapture);
     });
 
-    // 10) MediaPipe Pose setup
     const pose = new Pose({
       locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`
     });
@@ -261,18 +254,15 @@
       const ok = checkValidPose();
       drawFrame(ok);
 
-      // auto‑capture
       if (ok && !countdownTimer && !autoCapturing) {
         autoCapturing = true;
         startCountdown(doPhotoCapture);
       }
-      // if they step out mid‑countdown, abort
       if (!ok && countdownTimer) {
         resetAll();
       }
     });
 
-    // 11) start camera + loop
     startCamera().then(() => {
       const camera = new Camera(video, {
         onFrame: async () => { await pose.send({image: video}); },
