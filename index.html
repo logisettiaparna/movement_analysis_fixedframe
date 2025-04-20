@@ -11,240 +11,236 @@
       color: #333;
       text-align: center;
       padding: 1em;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
     }
-    h1 { margin-bottom: 0.3em; }
-    p { margin-bottom: 1em; max-width: 500px; }
-
-    #container {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 1em;
-      width: 100%;
-      max-width: 900px;
-    }
-
+    h1 { margin-bottom: .2em; }
+    p { margin-bottom: 1em; }
     #camera-container {
       position: relative;
-      width: 90vw;
+      margin: 0 auto;
+      width: 100%;
       max-width: 400px;
-      aspect-ratio: 9/16;
-      overflow: hidden;
-      border: 6px solid red;
-      border-radius: 8px;
+      aspect-ratio: 9 / 16; /* portrait */
       background: #000;
+      overflow: hidden;
     }
-    #camera-container.video-ok { border-color: red; }
-    #camera-container.valid { border-color: lime; }
-
-    video, canvas {
-      position: absolute;
-      top: 0; left: 0;
+    video, canvas, #orange-bar {
+      position: absolute; top: 0; left: 0;
       width: 100%; height: 100%;
       object-fit: cover;
     }
+    /* thick border */
+    #camera-container.ready { outline: 6px solid lime; }
+    #camera-container.not-ready { outline: 6px solid red; }
 
-    .sidebar {
-      display: flex;
-      flex-direction: column;
-      gap: 0.7em;
-      width: 200px;
+    /* orange bar at 7/8 height */
+    #orange-bar {
+      top: calc(7 / 8 * 100%);
+      height: calc(1 / 8 * 100%);
+      background: orange;
+      opacity: .8;
+      pointer-events: none;
     }
-    .box {
-      padding: 0.8em;
-      border: 2px solid #888;
-      border-radius: 6px;
-      min-height: 2.2em;
+
+    /* countdown & cues next to video */
+    #status {
+      margin-top: 1em;
+      font-size: 1.25em;
+      font-weight: bold;
+    }
+
+    .btns {
+      margin-top: 1em;
       display: flex;
-      align-items: center;
+      gap: .5em;
       justify-content: center;
-      font-size: 1.1em;
-    }
-    .countdown { font-size: 1.4em; font-weight: bold; }
-
-    .controls {
-      display: flex;
       flex-wrap: wrap;
-      gap: 0.5em;
-      justify-content: center;
     }
-    .controls button {
-      flex: 1 1 100px;
-      padding: 0.6em;
+    button {
+      padding: .6em 1em;
       font-size: 1em;
       border: 1px solid #888;
       background: #fff;
-      color: #555;
       border-radius: 4px;
-      cursor: not-allowed;
-      opacity: 0.5;
-    }
-    .controls button.enabled {
       cursor: pointer;
-      opacity: 1;
     }
-
-    @media (min-width: 700px) {
-      #container { flex-wrap: nowrap; }
+    @media (min-width: 600px) {
+      .btns { flex-direction: column; position: absolute; top: 50%; right: -160px; transform: translateY(-50%); }
     }
   </style>
 </head>
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Once your head clears the top slice and your feet sit on the orange bar, the border turns green and we auto‑capture after 5 s.</p>
+  <p>Frame your full body—once your head clears the top line and feet land on the orange bar, we’ll auto‑capture.</p>
 
-  <div id="container">
-    <div id="camera-container">
-      <video id="video" autoplay playsinline muted></video>
-      <canvas id="overlay"></canvas>
-    </div>
-    <div class="sidebar">
-      <div class="box" id="status">PLACE FEET ON ORANGE BAR</div>
-      <div class="box countdown" id="countdown">&nbsp;</div>
-      <div class="controls">
-        <button id="capture-btn">📸 Capture</button>
-        <button id="record-btn">🎥 Record 10 s</button>
-      </div>
-    </div>
+  <div id="camera-container" class="not-ready">
+    <video id="video" autoplay playsinline></video>
+    <canvas id="overlay"></canvas>
+    <div id="orange-bar"></div>
   </div>
 
+  <div id="status">Initializing…</div>
+  <div class="btns">
+    <button id="manual-capture">📸 Capture Manually</button>
+    <button id="reset">🔄 Reset</button>
+  </div>
+
+  <!-- load MediaPipe Pose -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
   <script>
     const video = document.getElementById('video');
     const overlay = document.getElementById('overlay');
-    const ctx = overlay.getContext('2d');
+    const ctx     = overlay.getContext('2d');
     const container = document.getElementById('camera-container');
-    const statusEl = document.getElementById('status');
-    const countdownEl = document.getElementById('countdown');
-    const capBtn = document.getElementById('capture-btn');
-    const recBtn = document.getElementById('record-btn');
+    const status  = document.getElementById('status');
+    const btnCap  = document.getElementById('manual-capture');
+    const btnReset= document.getElementById('reset');
+    let capturing = false;
 
-    let noseY=Infinity, heelMidY=Infinity;
-    let aligned = false, countingDown = false;
-
-    // request camera
-    async function startCamera(){
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user' },
-          audio: false
-        });
-        video.srcObject = stream;
-        container.classList.add('video-ok');
-      } catch(e) {
-        alert("❌ Camera access is required.\n" + e);
-      }
-    }
-    startCamera();
-
-    // resize canvas to match video
-    video.addEventListener('loadedmetadata',()=>{
-      overlay.width = video.videoWidth;
-      overlay.height = video.videoHeight;
+    // start camera
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user' }, audio: false
+    }).then(stream => {
+      video.srcObject = stream;
+    }).catch(err => {
+      status.textContent = '❌ Camera access denied';
+      console.error(err);
     });
 
-    // draw 8 slices each frame
-    function drawOverlay(){
+    video.addEventListener('loadedmetadata', () => {
+      overlay.width  = video.videoWidth;
+      overlay.height = video.videoHeight;
+      initPose();
+    });
+
+    // draw 8 dashed yellow lines
+    function drawGuides(color) {
       const W = overlay.width, H = overlay.height;
       ctx.clearRect(0,0,W,H);
-
-      const seg = H/8;
-      ctx.setLineDash([6,4]);
       ctx.lineWidth = 2;
-      ctx.strokeStyle = 'yellow';
-      for(let i=1;i<8;i++){
-        const y = seg*i;
+      ctx.strokeStyle = color;
+      ctx.setLineDash([6,4]);
+      for(let i=1; i<8; i++){
+        const y = H * (i/8);
         ctx.beginPath();
         ctx.moveTo(0,y);
         ctx.lineTo(W,y);
         ctx.stroke();
       }
       ctx.setLineDash([]);
-      // bottom bar
-      ctx.fillStyle = 'orange';
-      ctx.fillRect(0,7*seg, W, seg);
     }
 
-    // dummy landmarks poll (replace with Pose if you want)
-    // Here we'll approximate nose at center of frame for demo.
-    // In your real app swap this with mediapipe or face detection.
-    function estimateLandmarks(){
-      // just center X, and vertical sniff:
-      noseY = overlay.height * 0.1;         // pretend nose at top 10%
-      heelMidY = overlay.height * 0.95;     // pretend feet at bottom 5%
+    // MediaPipe Pose setup
+    function initPose() {
+      const pose = new Pose.Pose({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+      });
+      pose.setOptions({
+        modelComplexity: 0,
+        smoothLandmarks: true,
+        enableSegmentation: false,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+      pose.onResults(onPoseResults);
+
+      // camera utils
+      const camera = new CameraUtils.Camera(video, {
+        onFrame: async () => {
+          await pose.send({image: video});
+        },
+        width: 640, height: 480
+      });
+      camera.start();
     }
 
-    function checkAlignment(){
-      if(countingDown) return;  // freeze while countdown
-      estimateLandmarks();
-      const H = overlay.height;
-      const topSlice = H/8;
-      const bottomBound = 7*H/8;
-      const isAligned = (noseY < topSlice) && (heelMidY > bottomBound);
-      if(isAligned && !aligned){
-        aligned = true;
-        container.classList.add('valid');
-        statusEl.textContent = '✔️ ALIGNED! Capturing in 5…';
-        capBtn.classList.add('enabled'); capBtn.disabled = false;
-        recBtn.classList.add('enabled'); recBtn.disabled = false;
-        startCountdown();
+    function onPoseResults(results) {
+      if (!results.poseLandmarks) {
+        status.textContent = '❌ No body detected';
+        container.className = 'not-ready';
+        drawGuides('red');
+        return;
       }
-      if(!isAligned && aligned){
-        aligned = false;
-        container.classList.remove('valid');
-        statusEl.textContent = 'PLACE FEET ON ORANGE BAR';
-        countdownEl.textContent = '';
-        capBtn.classList.remove('enabled'); capBtn.disabled = true;
-        recBtn.classList.remove('enabled'); recBtn.disabled = true;
+      const lm = results.poseLandmarks;
+      const h = overlay.height, w = overlay.width;
+
+      // forehead approx: midpoint between eyes, up by (noseY - eyeY)
+      const eyeL = lm[Pose.PoseLandmark.LEFT_EYE_INNER];
+      const eyeR = lm[Pose.PoseLandmark.RIGHT_EYE_INNER];
+      const nose  = lm[Pose.PoseLandmark.NOSE];
+      const eyeX = (eyeL.x + eyeR.x)/2, eyeY = (eyeL.y + eyeR.y)/2;
+      const dY   = nose.y - eyeY;
+      const fhY  = eyeY - dY;
+
+      // feet: use both heels
+      const heelL = lm[Pose.PoseLandmark.LEFT_HEEL];
+      const heelR = lm[Pose.PoseLandmark.RIGHT_HEEL];
+      const footY = Math.max(heelL.y, heelR.y);
+
+      // convert to pixel coords
+      const pixelHead = fhY * h;
+      const pixelFoot = footY * h;
+
+      // top slice = 1/8*h, bottom orange bar at 7/8*h
+      const topSlice = h/8;
+      const orangeY  = 7*h/8;
+
+      // check alignment
+      const headClear = pixelHead < topSlice;
+      const feetOnBar = pixelFoot > orangeY && pixelFoot < h;
+
+      if (headClear && feetOnBar) {
+        container.className = 'ready';
+        drawGuides('lime');
+        status.textContent = '✅ Aligned! Capturing in 5…';
+        if (!capturing) autoCaptureCountdown();
+      } else {
+        container.className = 'not-ready';
+        drawGuides('red');
+        status.textContent = '❗ Align head above top line, feet on orange bar';
       }
     }
 
-    function startCountdown(){
-      countingDown = true;
+    // auto‐capture sequence
+    function autoCaptureCountdown() {
+      capturing = true;
       let s = 5;
-      countdownEl.textContent = s;
       const iv = setInterval(()=>{
-        s--;
-        countdownEl.textContent = s>0 ? s : '🎉';
-        if(s<=0){
+        status.textContent = `✅ Aligned! Capturing in ${s--}…`;
+        if (s < 0) {
           clearInterval(iv);
-          doCapture();
-          countingDown = false;
+          capturePhoto();
         }
       },1000);
     }
 
-    function doCapture(){
+    // manual capture
+    btnCap.addEventListener('click', ()=>{
+      if (capturing) return;
+      capturePhoto();
+    });
+
+    function capturePhoto() {
       const c = document.createElement('canvas');
       c.width = video.videoWidth;
-      c.height = video.videoHeight;
+      c.height= video.videoHeight;
       c.getContext('2d').drawImage(video,0,0);
-      c.toBlob(b=>{
+      c.toBlob(blob=>{
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(b);
+        a.href = URL.createObjectURL(blob);
         a.download = 'aramandi.png';
         a.click();
         URL.revokeObjectURL(a.href);
-      });
+      }, 'image/png');
+      status.textContent = '📸 Photo saved! Tap Reset to try again.';
+      capturing = false;
     }
 
-    // manual fallback
-    capBtn.addEventListener('click',doCapture);
-    recBtn.addEventListener('click',()=>{
-      alert("🎥 Record not implemented in this demo.");
+    btnReset.addEventListener('click', ()=>{
+      capturing = false;
+      status.textContent = '❗ Align head above top line, feet on orange bar';
     });
-
-    // main loop
-    function loop(){
-      drawOverlay();
-      if(container.classList.contains('video-ok')){
-        checkAlignment();
-      }
-      requestAnimationFrame(loop);
-    }
-    loop();
   </script>
 </body>
 </html>
