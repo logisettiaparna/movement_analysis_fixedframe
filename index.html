@@ -13,7 +13,7 @@
       text-align:center;
       padding:1em;
     }
-    h1 { margin-bottom:.2em }
+    h1 { margin-bottom:.3em }
     p  { margin-bottom:1em }
     #camera-container {
       position:relative;
@@ -35,7 +35,7 @@
       margin-top:1em;
     }
     .btns button {
-      flex:1 1 140px;
+      flex:1 1 160px;
       padding:.6em 1em;
       font-size:1em;
       border:1px solid #888;
@@ -56,35 +56,39 @@
 </head>
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Step back until you see <strong>8 red slices</strong>. They turn <strong>green</strong> when your <em>forehead</em> is above slice 1 and your <em>heels</em> are below slice 8. Hold 5 s to auto‑capture.</p>
+  <p>
+    Step back until you see the <strong>orange plate</strong> under your feet.<br/>
+    When you’re in view, 8 red slices appear—raise your forehead above slice 1 and lower your heels below slice 8.<br/>
+    They’ll turn <strong>green</strong>, then hold still for 5 s to auto‑capture!
+  </p>
   <div id="camera-container">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="overlay"></canvas>
   </div>
   <div class="btns">
-    <button id="record-btn">🎥 Record 10 s Video</button>
+    <button id="record-btn">🎥 Record 10 s Video</button>
   </div>
 
-  <!-- Mediapipe Pose + Camera Utils -->
+  <!-- Mediapipe & Camera Utils -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.5/camera_utils.js"></script>
   <script>
     const video   = document.getElementById('video');
     const overlay = document.getElementById('overlay');
     const ctx     = overlay.getContext('2d');
-    const recBtn  = document.getElementById('record-btn');
+    const recordBtn = document.getElementById('record-btn');
 
     let landmarks = null;
     let counting  = false;
-    let countdown = 5;
-    let cdHandle  = null;
+    let countdown = 0;
+    let cdInterval= null;
 
-    // start camera
+    // 1) start camera
     navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user' }, audio:false })
-      .then(s=> video.srcObject=s)
-      .catch(e=> alert('Camera Error: '+e));
+      .then(stream=> video.srcObject=stream)
+      .catch(err=> alert('⚠️ Camera error: '+err));
 
-    // resize canvas to match displayed size
+    // 2) resize canvas to video dimensions
     function resizeCanvas(){
       overlay.width  = overlay.clientWidth;
       overlay.height = overlay.clientHeight;
@@ -92,143 +96,159 @@
     window.addEventListener('resize', resizeCanvas);
     video.addEventListener('loadedmetadata', resizeCanvas);
 
-    // pose
+    // 3) Mediapipe Pose setup
     const pose = new Pose.Pose({
       locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${f}`
     });
     pose.setOptions({
-      modelComplexity      : 1,
-      smoothLandmarks      : true,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence : 0.5
+      modelComplexity:1,
+      smoothLandmarks:true,
+      minDetectionConfidence:0.5,
+      minTrackingConfidence:0.5
     });
-    pose.onResults(res=> landmarks = res.poseLandmarks);
+    pose.onResults(r=> landmarks = r.poseLandmarks);
 
     new Camera.Camera(video, {
       onFrame: async ()=> await pose.send({image:video}),
       width:1280, height:720
     }).start();
 
-    // draw 8 slices + border
-    function drawOverlay(valid){
+    // 4) draw orange “stand‐here” plate
+    function drawPlate(){
       const W = overlay.width, H = overlay.height;
       ctx.clearRect(0,0,W,H);
+      // semi‐transparent black veil
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.fillRect(0,0,W,H);
+      // orange plate at bottom 15% height
+      const plateH = H*0.15;
+      ctx.fillStyle = 'orange';
+      ctx.fillRect(W*0.2, H-plateH-10, W*0.6, plateH);
+      // label
+      ctx.fillStyle = '#333';
+      ctx.font = '24px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Stand Here', W/2, H-plateH/2 + 10);
+    }
 
+    // 5) draw 8 slices + border (red or green)
+    function drawSlices(valid){
+      const W = overlay.width, H = overlay.height;
+      ctx.clearRect(0,0,W,H);
       // border
-      ctx.lineWidth   = 4;
+      ctx.lineWidth = 4;
       ctx.strokeStyle = valid?'lime':'red';
       ctx.strokeRect(0,0,W,H);
 
       // slices
       const seg = H/8;
-      ctx.lineWidth   = 2;
+      ctx.lineWidth = 2;
       ctx.strokeStyle = valid?'lime':'red';
       ctx.setLineDash([5,3]);
-      ctx.font        = '20px sans-serif';
-      ctx.fillStyle   = valid?'lime':'red';
-      ctx.textAlign   = 'left';
-      for(let i=1;i<8;i++){
+      ctx.font = '20px sans-serif';
+      ctx.fillStyle = valid?'lime':'red';
+      ctx.textAlign = 'left';
+      for(let i=1; i<8; i++){
         const y = seg*i;
         ctx.beginPath();
         ctx.moveTo(0,y);
         ctx.lineTo(W,y);
         ctx.stroke();
-        ctx.fillText(i,10,y-5);
+        ctx.fillText(i, 10, y-5);
       }
       ctx.setLineDash([]);
     }
 
-    // check forehead above slice 1 and heels below slice 8
+    // 6) check if forehead ⬆️ slice 1 and heels ⬇️ slice 8
     function checkValid(){
       if(!landmarks) return false;
       const H = overlay.height;
 
-      // nose tip landmark 0
-      const noseY = landmarks[0].y*H;
-      // forehead by reflecting eyes→nose upward
-      const leY   = landmarks[1].y*H;
-      const reY   = landmarks[4].y*H;
-      const eyeY  = (leY+reY)/2;
-      const foreY = eyeY - (noseY - eyeY);
+      // nose tip = landmark 0
+      const ny = landmarks[0].y * H;
+      // eyes = 1 & 4
+      const ey = (landmarks[1].y + landmarks[4].y)/2 * H;
+      // approximate forehead = mirror nose over eyes:
+      const fy = ey - (ny - ey);
+      // heels = 27 & 28
+      const hy = Math.max(landmarks[27].y, landmarks[28].y) * H;
 
-      // heels 27/28
-      const lhY   = landmarks[27].y*H;
-      const rhY   = landmarks[28].y*H;
-      const ftY   = Math.max(lhY, rhY);
-
-      const topOK    = foreY < H/8;
-      const bottomOK = ftY  > 7*H/8;
-      return topOK && bottomOK;
+      return fy < H/8 && hy > 7*H/8;
     }
 
-    // animate + auto‑countdown
-    function loop(){
-      const ok = checkValid();
-      if(ok && !counting) startCountdown();
-      if(!ok && counting){ clearInterval(cdHandle); counting=false; }
-      drawOverlay(ok);
-      requestAnimationFrame(loop);
-    }
-
+    // 7) countdown + auto‑capture
     function startCountdown(){
       counting = true;
       countdown = 5;
-      cdHandle = setInterval(()=>{
+      cdInterval = setInterval(()=>{
+        // if they move out of valid zone, cancel
         if(!checkValid()){
-          clearInterval(cdHandle);
+          clearInterval(cdInterval);
           counting=false;
           return;
         }
-        // dark overlay + big number
-        drawOverlay(true);
-        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        // draw slice + big number overlay
+        drawSlices(true);
+        ctx.fillStyle='rgba(0,0,0,0.6)';
         ctx.fillRect(0,0,overlay.width,overlay.height);
         ctx.fillStyle='white';
         ctx.font='bold 100px sans-serif';
         ctx.textAlign='center';
         ctx.fillText(countdown>0?countdown:'', overlay.width/2, overlay.height/2);
-        if(--countdown<0){
-          clearInterval(cdHandle);
-          capturePhoto();
+        if(--countdown < 0){
+          clearInterval(cdInterval);
+          capturePNG();
           counting=false;
         }
       },1000);
     }
 
-    function capturePhoto(){
+    // 8) actual PNG capture
+    function capturePNG(){
       const c = document.createElement('canvas');
       c.width  = video.videoWidth;
       c.height = video.videoHeight;
       c.getContext('2d').drawImage(video,0,0);
-      c.toBlob(b=>{
-        const a=document.createElement('a');
-        a.href=URL.createObjectURL(b);
-        a.download='aramandi.png';
+      c.toBlob(blob=>{
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'aramandi.png';
         a.click();
         URL.revokeObjectURL(a.href);
-      },'image/png');
+      }, 'image/png');
     }
 
-    // record 10s webm
-    recBtn.addEventListener('click', ()=>{
-      if(!window.MediaRecorder) return alert('No MediaRecorder');
-      const recorder = new MediaRecorder(video.srcObject, { mimeType:'video/webm' });
-      const parts = [];
-      recorder.ondataavailable = e=> parts.push(e.data);
-      recorder.onstop = ()=>{
-        const blob = new Blob(parts, { type:'video/webm' });
-        const a    = document.createElement('a');
-        a.href     = URL.createObjectURL(blob);
-        a.download = 'aramandi.webm';
-        a.click();
-      };
-      recorder.start();
-      setTimeout(()=> recorder.state==='recording' && recorder.stop(), 10000);
-    });
-
+    // 9) main loop
+    function loop(){
+      if(!landmarks){
+        drawPlate();
+      } else {
+        const ok = checkValid();
+        drawSlices(ok);
+        if(ok && !counting) startCountdown();
+      }
+      requestAnimationFrame(loop);
+    }
     video.addEventListener('play', ()=>{
       resizeCanvas();
       loop();
+    });
+
+    // 10) 10s WebM video
+    recordBtn.addEventListener('click', ()=>{
+      if(!window.MediaRecorder) return alert('No MediaRecorder');
+      const rec = new MediaRecorder(video.srcObject, { mimeType:'video/webm' });
+      const bits = [];
+      rec.ondataavailable = e=> bits.push(e.data);
+      rec.onstop = ()=>{
+        const blob = new Blob(bits, { type:'video/webm' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'aramandi.webm';
+        a.click();
+      };
+      rec.start();
+      setTimeout(()=> rec.state==='recording' && rec.stop(), 10000);
     });
   </script>
 </body>
