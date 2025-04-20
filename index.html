@@ -29,11 +29,10 @@
       width: 100%; height: 100%;
       object-fit: cover;
     }
-    /* orange bar at bottom slice */
+    /* orange bar = bottom 1/8th */
     #orange-bar {
       position: absolute;
-      left: 0;
-      width: 100%;
+      left: 0; width: 100%;
       height: calc(100% / 8);
       top: calc(7 * (100% / 8));
       background: orange;
@@ -42,7 +41,7 @@
     }
 
     #countdown {
-      font-size: 2em;
+      font-size: 1.8em;
       font-weight: bold;
       margin-top: 0.5em;
       min-height: 1.2em;
@@ -62,7 +61,6 @@
       border-radius: 4px;
       cursor: pointer;
     }
-
     @media (min-width: 600px) {
       #container {
         flex-direction: row;
@@ -78,7 +76,7 @@
 </head>
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Clear the <strong>top slice</strong> with your head and land your feet on the <strong>orange bar</strong> to auto‑capture.</p>
+  <p>Ensure your head clears the top slice and your heels land on the orange bar to auto‑capture.</p>
 
   <div id="container">
     <div id="camera-container">
@@ -95,6 +93,9 @@
     </div>
   </div>
 
+  <!-- MediaPipe Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
   <script>
     const video      = document.getElementById('video');
     const overlay    = document.getElementById('overlay');
@@ -105,13 +106,14 @@
     const countdownD = document.getElementById('countdown');
 
     let countdownTimer = null;
+    let lastResults    = null;
+    let autoCapturing  = false;
 
-    // 1) Ask for camera
+    // 1) prompt for camera
     async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user' },
-          audio: false
+          video: { facingMode: 'user' }, audio: false
         });
         video.srcObject = stream;
       } catch (e) {
@@ -120,126 +122,163 @@
       }
     }
 
-    // 2) When metadata loaded, size the canvas
+    // 2) size overlay once video ready
     video.addEventListener('loadedmetadata', () => {
       overlay.width  = video.videoWidth;
       overlay.height = video.videoHeight;
       drawFrame(false);
     });
 
-    // 3) Draw 8 dashed slices + red/green border
+    // 3) draw border + 8 slices
     function drawFrame(valid) {
       const W = overlay.width, H = overlay.height;
-      ctx.clearRect(0, 0, W, H);
+      ctx.clearRect(0,0,W,H);
 
       // border
       ctx.lineWidth   = 6;
       ctx.strokeStyle = valid ? 'lime' : 'red';
-      ctx.strokeRect(0, 0, W, H);
+      ctx.strokeRect(0,0,W,H);
 
-      // eight dashed slices
-      const seg = H / 8;
+      // dashed slices
+      const seg = H/8;
       ctx.lineWidth   = 2;
       ctx.strokeStyle = 'yellow';
       ctx.setLineDash([6,4]);
-      for (let i = 1; i < 8; i++) {
+      for (let i=1; i<8; i++) {
         const y = seg * i;
         ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(W, y);
+        ctx.moveTo(0,y);
+        ctx.lineTo(W,y);
         ctx.stroke();
       }
       ctx.setLineDash([]);
     }
 
-    // 4) Very simple “pose” check: head must be above slice #1, both heels on orange bar
+    // 4) check pose: nose above top slice, heels on orange bar
     function checkValidPose() {
-      // FALLBACK: we don’t have full pose detection here, so stub out
-      // Always return false so you manually hit Capture when ready.
-      // Replace with Mediapipe JS Pose logic and landmark testing if you wish!
-      return false;
+      if (!lastResults || !lastResults.poseLandmarks) return false;
+      const lm   = lastResults.poseLandmarks;
+      const H    = overlay.height;
+      const seg  = H/8;
+
+      // nose tip = landmark 0
+      const noseY = lm[0].y * H;
+
+      // heel landmarks
+      const L = lm[Pose.PoseLandmark.LEFT_HEEL];
+      const R = lm[Pose.PoseLandmark.RIGHT_HEEL];
+      const heelY = ((L.y + R.y)/2) * H;
+
+      const headAbove = noseY < seg;
+      // allow ±20% of slice for feet
+      const footOn    = Math.abs(heelY - 7*seg) < 0.2*seg;
+
+      return headAbove && footOn;
     }
 
-    // 5) Countdown helper
-    function startCountdown(onComplete) {
+    // 5) countdown helper
+    function startCountdown(onDone) {
       let s = 5;
       countdownD.textContent = s;
       countdownTimer = setInterval(() => {
         s--;
-        countdownD.textContent = s > 0 ? s : '';
+        countdownD.textContent = s>0 ? s : '';
         if (s <= 0) {
           clearInterval(countdownTimer);
           countdownTimer = null;
-          onComplete();
+          onDone();
         }
-      }, 1000);
+      },1000);
     }
 
-    // 6) Manual photo capture
-    btnCapture.addEventListener('click', () => {
-      if (countdownTimer) return;
-      startCountdown(() => {
-        const c = document.createElement('canvas');
-        c.width  = video.videoWidth;
-        c.height = video.videoHeight;
-        c.getContext('2d').drawImage(video, 0, 0);
-        c.toBlob(blob => {
-          const a = document.createElement('a');
-          a.href        = URL.createObjectURL(blob);
-          a.download    = 'aramandi.png';
-          a.style.display = 'none';
-          document.body.append(a);
-          a.click();
-          a.remove();
-        }, 'image/png');
-      });
-    });
+    // 6) photo capture
+    function doPhotoCapture() {
+      const c = document.createElement('canvas');
+      c.width  = video.videoWidth;
+      c.height = video.videoHeight;
+      c.getContext('2d').drawImage(video,0,0);
+      c.toBlob(b => {
+        const a = document.createElement('a');
+        a.href     = URL.createObjectURL(b);
+        a.download = 'aramandi.png';
+        a.click();
+      }, 'image/png');
+    }
 
-    // 7) Manual video capture
-    btnRecord.addEventListener('click', () => {
-      if (countdownTimer) return;
-      startCountdown(() => {
-        if (!MediaRecorder) {
-          return alert('MediaRecorder unsupported.');
-        }
-        const stream = video.srcObject;
-        const rec    = new MediaRecorder(stream, { mimeType: 'video/webm' });
-        const chunks = [];
-        rec.ondataavailable = e => e.data.size && chunks.push(e.data);
-        rec.onstop = () => {
-          const blob = new Blob(chunks, { type: 'video/webm' });
-          const a    = document.createElement('a');
-          a.href     = URL.createObjectURL(blob);
-          a.download = 'aramandi.webm';
-          document.body.append(a);
-          a.click();
-          a.remove();
-        };
-        rec.start();
-        setTimeout(() => rec.state !== 'inactive' && rec.stop(), 10000);
-      });
-    });
-
-    // 8) Reset everything
-    btnReset.addEventListener('click', () => {
-      if (countdownTimer) {
-        clearInterval(countdownTimer);
-        countdownTimer = null;
+    // 7) video capture
+    function doVideoCapture() {
+      if (!window.MediaRecorder) {
+        return alert('MediaRecorder unsupported');
       }
+      const stream = video.srcObject;
+      const rec    = new MediaRecorder(stream, { mimeType:'video/webm' });
+      const chunks = [];
+      rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+      rec.onstop = () => {
+        const blob = new Blob(chunks,{type:'video/webm'});
+        const a    = document.createElement('a');
+        a.href     = URL.createObjectURL(blob);
+        a.download = 'aramandi.webm';
+        a.click();
+      };
+      rec.start();
+      setTimeout(()=>rec.state!=='inactive'&&rec.stop(),10000);
+    }
+
+    // 8) Reset
+    function resetAll() {
+      if (countdownTimer) clearInterval(countdownTimer);
+      countdownTimer = null;
+      autoCapturing  = false;
       countdownD.textContent = '';
       drawFrame(false);
+    }
+    btnReset.addEventListener('click', resetAll);
+
+    // 9) Manual controls
+    btnCapture.addEventListener('click', () => {
+      if (countdownTimer) return;
+      startCountdown(doPhotoCapture);
+    });
+    btnRecord.addEventListener('click', () => {
+      if (countdownTimer) return;
+      startCountdown(doVideoCapture);
     });
 
-    // 9) Animation loop (for future auto‑capture; currently always draws red)
-    function loop() {
+    // 10) MediaPipe Pose setup
+    const pose = new Pose({
+      locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`
+    });
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.6
+    });
+    pose.onResults(results => {
+      lastResults = results;
       const ok = checkValidPose();
       drawFrame(ok);
-      requestAnimationFrame(loop);
-    }
 
-    // kick‑off
+      // auto‑capture
+      if (ok && !countdownTimer && !autoCapturing) {
+        autoCapturing = true;
+        startCountdown(doPhotoCapture);
+      }
+      // if they step out mid‑countdown, abort
+      if (!ok && countdownTimer) {
+        resetAll();
+      }
+    });
+
+    // 11) start camera + loop
     startCamera().then(() => {
-      video.addEventListener('play', loop);
+      const camera = new Camera(video, {
+        onFrame: async () => { await pose.send({image: video}); },
+        width: 360, height: 640
+      });
+      camera.start();
     });
   </script>
 </body>
