@@ -13,7 +13,6 @@
       position: relative;
       margin: 0 auto;
       width: 100%; max-width: 360px;
-      /* portrait 9:16 ratio */
       aspect-ratio: 9 / 16;
       background: #000;
       overflow: hidden;
@@ -22,6 +21,18 @@
       position: absolute; top: 0; left: 0;
       width: 100%; height: 100%;
       object-fit: cover;
+    }
+    /* the orange “stand here” plate — now INSIDE the camera view */
+    #stand-plate {
+      position: absolute;
+      bottom: 0;
+      width: 100%;
+      background: #f5a623;
+      color: white;
+      padding: 0.5em 0;
+      font-size: 1em;
+      font-weight: bold;
+      z-index: 2;
     }
     .btn-container {
       display: flex;
@@ -61,9 +72,11 @@
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
   <p>Frame your full body—when your head & feet hit the 1st & 8th slices, we’ll auto‑capture.</p>
+
   <div id="camera-container">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="overlay"></canvas>
+    <div id="stand-plate">Stand here →</div>
   </div>
 
   <div class="btn-container">
@@ -75,132 +88,113 @@
   <script>
     const video = document.getElementById('video');
     const overlay = document.getElementById('overlay');
+    const standPlate = document.getElementById('stand-plate');
     const ctx = overlay.getContext('2d');
     const btnPhoto = document.getElementById('capture-photo-btn');
     const btnVideo = document.getElementById('record-video-btn');
     const countdownDisplay = document.getElementById('countdown-display');
 
-    // 1) start camera
+    // 1) turn on camera
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false })
       .then(stream => video.srcObject = stream)
-      .catch(err => alert('Camera access denied.'));
+      .catch(() => alert('Camera access required.'));
 
-    // 2) when video ready, size canvas
+    // 2) once we know video size, size the canvas
     video.addEventListener('loadedmetadata', () => {
       overlay.width = video.videoWidth;
       overlay.height = video.videoHeight;
-      requestAnimationFrame(drawLoop);
+      requestAnimationFrame(drawOverlay);
     });
 
-    // 3) draw the 8‐slice overlay + border color
-    let sliceY = [], isFramed = false;
-    function drawLoop() {
+    let framed = false;
+    function drawOverlay() {
       const W = overlay.width, H = overlay.height;
       ctx.clearRect(0, 0, W, H);
 
-      // compute or reuse slice positions
+      // compute slice lines
       const seg = H / 8;
-      sliceY = Array.from({length:9}, (_,i) => i*seg);
 
-      // border: red until framed, then green
+      // draw border
       ctx.lineWidth = 4;
-      ctx.strokeStyle = isFramed ? 'lime' : 'red';
+      ctx.strokeStyle = framed ? 'lime' : 'red';
       ctx.strokeRect(0, 0, W, H);
 
-      // horizontal slice lines + labels
-      ctx.setLineDash([4,2]);
+      // draw dashed horizontal slices
+      ctx.setLineDash([5,3]);
       ctx.lineWidth = 2;
-      ctx.strokeStyle = isFramed ? 'lime' : 'yellow';
-      ctx.fillStyle = isFramed ? 'lime' : 'yellow';
-      ctx.font = '20px sans-serif';
+      ctx.strokeStyle = framed ? 'lime' : 'yellow';
+      ctx.fillStyle   = framed ? 'lime' : 'yellow';
+      ctx.font = '18px sans-serif';
       ctx.textAlign = 'left';
-      for (let i=1; i<8; i++) {
-        const y = sliceY[i];
+      for(let i=1; i<8; i++){
+        const y = seg * i;
         ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(W, y);
+        ctx.moveTo(0,y);
+        ctx.lineTo(W,y);
         ctx.stroke();
-        ctx.fillText(i, 10, y - 6);
+        ctx.fillText(i, 8, y - 6);
       }
       ctx.setLineDash([]);
 
-      // 4) simple head/feet check stub
-      //    (replace with actual pose‐landmarks later)
-      //    Here we assume if user manually aligns head near sliceY[1]
-      //    and feet near sliceY[7], it's framed.
-      //    In a real app you'd run a pose detector here.
-      //    For demo we just toggle framing if user presses Capture.
-      //    So we don't auto‐detect now.
-
-      requestAnimationFrame(drawLoop);
+      // stub: check "framed" if head & feet cross 1st/8th lines
+      // in prod you’d run pose detection here and set `framed = true` accordingly
+      // for now you can double‑click video to toggle if you want to test
+      requestAnimationFrame(drawOverlay);
     }
 
-    // generic 5s countdown
-    function countdown(seconds, onTick, onDone) {
-      let s = seconds;
-      onTick(s);
-      const iv = setInterval(() => {
-        s--;
-        onTick(s);
-        if (s <= 0) {
-          clearInterval(iv);
-          onDone();
-        }
-      }, 1000);
+    video.addEventListener('dblclick', ()=> framed = !framed);
+
+    function countdown(sec, tick, done){
+      let s=sec; tick(s);
+      const iv = setInterval(()=>{
+        s--; tick(s);
+        if(s<=0){ clearInterval(iv); done(); }
+      },1000);
     }
 
-    // 5) Capture photo handler
-    btnPhoto.addEventListener('click', () => {
-      if (!isFramed && !confirm('Not aligned—capture anyway?')) return;
+    btnPhoto.onclick = ()=>{
+      if(!framed && !confirm('Not aligned—capture anyway?')) return;
       countdown(5,
-        s => countdownDisplay.textContent = s>0 ? `📸 Capturing in ${s}…` : '',
-        () => {
-          countdownDisplay.textContent = '';
-          const cap = document.createElement('canvas');
-          cap.width = video.videoWidth;
-          cap.height = video.videoHeight;
-          cap.getContext('2d').drawImage(video,0,0);
-          cap.toBlob(blob => {
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = 'aramandi.png';
+        s=> countdownDisplay.textContent = s>0 ? `📸 in ${s}…` : '',
+        ()=>{
+          countdownDisplay.textContent='';
+          const c=document.createElement('canvas');
+          c.width=video.videoWidth; c.height=video.videoHeight;
+          c.getContext('2d').drawImage(video,0,0);
+          c.toBlob(b=>{
+            const a=document.createElement('a');
+            a.href=URL.createObjectURL(b);
+            a.download='aramandi.png';
             a.click();
             URL.revokeObjectURL(a.href);
-          }, 'image/png');
+          },'image/png');
         }
       );
-    });
+    };
 
-    // 6) Record 10s video handler
-    btnVideo.addEventListener('click', () => {
-      if (!isFramed && !confirm('Not aligned—record anyway?')) return;
+    btnVideo.onclick = ()=>{
+      if(!framed && !confirm('Not aligned—record anyway?')) return;
       countdown(5,
-        s => countdownDisplay.textContent = s>0 ? `🎥 Recording in ${s}…` : '',
-        () => {
-          countdownDisplay.textContent = '';
-          if (!window.MediaRecorder) return alert('Recorder not supported');
-          const stream = video.srcObject;
-          const rec = new MediaRecorder(stream, { mimeType: 'video/webm' });
-          const chunks = [];
-          rec.ondataavailable = e => e.data.size && chunks.push(e.data);
-          rec.onstop = () => {
-            const blob = new Blob(chunks, { type: 'video/webm' });
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = 'aramandi.webm';
+        s=> countdownDisplay.textContent = s>0 ? `🎥 in ${s}…` : '',
+        ()=>{
+          countdownDisplay.textContent='';
+          if(!window.MediaRecorder) return alert('No recorder');
+          const rec=new MediaRecorder(video.srcObject,{mimeType:'video/webm'});
+          const data=[];
+          rec.ondataavailable=e=>e.data.size&&data.push(e.data);
+          rec.onstop=()=>{
+            const blob=new Blob(data,{type:'video/webm'});
+            const a=document.createElement('a');
+            a.href=URL.createObjectURL(blob);
+            a.download='aramandi.webm';
             a.click();
             URL.revokeObjectURL(a.href);
           };
           rec.start();
-          setTimeout(()=>rec.state!=='inactive' && rec.stop(), 10000);
+          setTimeout(()=>rec.stop(),10000);
         }
       );
-    });
-
-    // 7) For demo: toggle framing state by ↓ pressing both btns together
-    //    (so you can see the border switch color)
-    video.addEventListener('dblclick', ()=> isFramed = !isFramed);
-
+    };
   </script>
 </body>
 </html>
