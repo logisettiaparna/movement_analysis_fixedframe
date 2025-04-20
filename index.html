@@ -9,7 +9,6 @@
     body {
       background:#f7f7f7;
       font-family:sans-serif;
-      color:#333;
       text-align:center;
       padding:1em;
     }
@@ -64,72 +63,70 @@
     <canvas id="overlay"></canvas>
   </div>
   <div class="btn-container">
-    <button id="record-video-btn">🎥 Record 10 s Video</button>
+    <button id="record-video-btn">🎥 Record 10 s Video</button>
   </div>
 
   <!-- MediaPipe Pose -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.5/camera_utils.js"></script>
-
   <script>
   const video   = document.getElementById('video');
   const overlay = document.getElementById('overlay');
   const ctx     = overlay.getContext('2d');
   const btnVid  = document.getElementById('record-video-btn');
 
-  let latestLandmarks = null;
-  let countingDown    = false;
-  let cdSeconds       = 5;
-  let cdInterval      = null;
+  let landmarks = null;
+  let counting  = false;
+  let cd        = 5;
+  let cdTimer   = null;
 
   // 1) start camera
   navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:false})
     .then(s=> video.srcObject=s)
     .catch(e=> alert("Camera error: "+e));
 
-  // 2) resize canvas once we know video size
-  video.addEventListener('loadedmetadata', () => {
-    overlay.width  = video.videoWidth;
-    overlay.height = video.videoHeight;
-  });
+  // 2) once we have a displayed size, sync canvas
+  function resizeCanvas(){
+    overlay.width  = overlay.clientWidth;
+    overlay.height = overlay.clientHeight;
+  }
+  window.addEventListener('resize', resizeCanvas);
+  video.addEventListener('loadedmetadata', resizeCanvas);
 
-  // 3) set up MediaPipe Pose
+  // 3) set up Pose
   const pose = new Pose.Pose({
-    locateFile: file=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}`
+    locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${f}`
   });
   pose.setOptions({
-    modelComplexity: 1,
-    smoothLandmarks: true,
+    modelComplexity      : 1,
+    smoothLandmarks      : true,
     minDetectionConfidence: 0.5,
-    minTrackingConfidence: 0.5
+    minTrackingConfidence : 0.5
   });
-  pose.onResults(r=> {
-    latestLandmarks = r.poseLandmarks;
-  });
+  pose.onResults(r=> landmarks = r.poseLandmarks);
 
-  const camera = new Camera.Camera(video, {
+  new Camera.Camera(video, {
     onFrame: async ()=> await pose.send({image:video}),
-    width: 1280, height: 720
-  });
-  camera.start();
+    width:1280, height:720
+  }).start();
 
-  // 4) draw 8 slices + border
-  function drawOverlay(isValid){
+  // 4) draw border + 8 slices
+  function drawOverlay(valid){
     const W = overlay.width, H = overlay.height;
     ctx.clearRect(0,0,W,H);
 
     // border
     ctx.lineWidth   = 4;
-    ctx.strokeStyle = isValid?'lime':'red';
+    ctx.strokeStyle = valid?'lime':'red';
     ctx.strokeRect(0,0,W,H);
 
     // slices
     const seg = H/8;
     ctx.lineWidth   = 2;
-    ctx.strokeStyle = isValid?'lime':'red';
+    ctx.strokeStyle = valid?'lime':'red';
     ctx.setLineDash([5,3]);
     ctx.font        = '20px sans-serif';
-    ctx.fillStyle   = isValid?'lime':'red';
+    ctx.fillStyle   = valid?'lime':'red';
     ctx.textAlign   = 'left';
     for(let i=1;i<8;i++){
       const y = seg*i;
@@ -142,57 +139,55 @@
     ctx.setLineDash([]);
   }
 
-  // 5) validation: forehead above slice 1 & feet below slice 8
+  // 5) are we aligned?
   function checkValid(){
-    if(!latestLandmarks) return false;
+    if(!landmarks) return false;
     const H = overlay.height;
-    // nose tip
-    const nose = latestLandmarks[0];
-    // approximate forehead: take the midpoint of the eyes and raise by same eye->nose distance
-    const leftEye  = latestLandmarks[1];  // inner eye
-    const rightEye = latestLandmarks[4];
-    const eyeY     = (leftEye.y+rightEye.y)/2;
-    const noseY    = nose.y;
-    const offset   = noseY - eyeY;
-    const foreheadY = eyeY - offset;
+    // nose tip = landmark 0
+    const noseY = landmarks[0].y * H;
 
-    // feet: use left & right heel
-    const lh = latestLandmarks[28], rh = latestLandmarks[27];
-    const footMidY = Math.max(lh.y, rh.y);
+    // forehead: reflect eye→nose upward
+    const leY = landmarks[1].y * H;
+    const reY = landmarks[4].y * H;
+    const eyeY= (leY+reY)/2;
+    const fdY = eyeY - (noseY-eyeY);
 
-    // convert to pixels
-    const fy = foreheadY*H;
-    const ny = noseY*H;
-    const fy2= noseY*H; // we don't draw chin so just ensure nose is inside
-    const fm = footMidY*H;
+    // feet: max of heels 27/28
+    const lhY = landmarks[28].y * H;
+    const rhY = landmarks[27].y * H;
+    const ftY = Math.max(lhY,rhY);
 
-    const topOK    = fy  < H/8;
-    const bottomOK = fm > 7*H/8;
+    const topOK    = fdY < H/8;
+    const bottomOK = ftY  > 7*H/8;
+
+    // debug:
+    // console.log({fdY, noseY, ftY, topOK, bottomOK});
+
     return topOK && bottomOK;
   }
 
-  // 6) countdown & capture
-  function startCountdown(){
-    countingDown = true;
-    cdSeconds    = 5;
-    cdInterval   = setInterval(()=>{
+  // 6) countdown + auto‑capture
+  function startCount(){
+    counting = true;
+    cd       = 5;
+    cdTimer  = setInterval(()=>{
       if(!checkValid()){
-        clearInterval(cdInterval);
-        countingDown=false;
+        clearInterval(cdTimer);
+        counting=false;
         return;
       }
-      // show countdown overlay
+      // overlay countdown
       drawOverlay(true);
-      ctx.fillStyle   = 'rgba(0,0,0,0.6)';
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
       ctx.fillRect(0,0,overlay.width,overlay.height);
-      ctx.fillStyle   = 'white';
-      ctx.font        = 'bold 100px sans-serif';
-      ctx.textAlign   = 'center';
-      ctx.fillText(cdSeconds>0?cdSeconds:'', overlay.width/2, overlay.height/2);
-      if(--cdSeconds<0){
-        clearInterval(cdInterval);
+      ctx.fillStyle='white';
+      ctx.font='bold 100px sans-serif';
+      ctx.textAlign='center';
+      ctx.fillText(cd>0?cd:'', overlay.width/2, overlay.height/2);
+      if(--cd < 0){
+        clearInterval(cdTimer);
         capturePhoto();
-        countingDown=false;
+        counting=false;
       }
     },1000);
   }
@@ -202,23 +197,23 @@
     c.width  = video.videoWidth;
     c.height = video.videoHeight;
     c.getContext('2d').drawImage(video,0,0);
-    c.toBlob(blob=>{
-      const a = document.createElement('a');
-      a.href     = URL.createObjectURL(blob);
-      a.download = 'aramandi.png';
+    c.toBlob(b=>{
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(b);
+      a.download='aramandi.png';
       a.click();
       URL.revokeObjectURL(a.href);
     },'image/png');
   }
 
-  // 7) optional 10 s video
+  // 7) fallback 10 s video
   btnVid.addEventListener('click',()=>{
-    if(!window.MediaRecorder) return alert('MediaRecorder unsupported');
-    const rec = new MediaRecorder(video.srcObject, {mimeType:'video/webm'});
-    let chunks=[];
-    rec.ondataavailable = e=>chunks.push(e.data);
+    if(!window.MediaRecorder) return alert('No MediaRecorder');
+    const rec = new MediaRecorder(video.srcObject,{mimeType:'video/webm'});
+    const parts = [];
+    rec.ondataavailable = e=>parts.push(e.data);
     rec.onstop = ()=>{
-      const blob=new Blob(chunks,{type:'video/webm'});
+      const blob=new Blob(parts,{type:'video/webm'});
       const a=document.createElement('a');
       a.href=URL.createObjectURL(blob);
       a.download='aramandi.webm';
@@ -232,12 +227,17 @@
   // 8) main loop
   function loop(){
     const ok = checkValid();
-    if(ok && !countingDown)   startCountdown();
-    if(!ok && countingDown)   { clearInterval(cdInterval); countingDown=false; }
+    if(ok && !counting)       startCount();
+    if(!ok && counting)       { clearInterval(cdTimer); counting=false; }
     drawOverlay(ok);
     requestAnimationFrame(loop);
   }
-  video.addEventListener('play',loop);
+
+  video.addEventListener('play',()=>{
+    // start only once we have a valid display size
+    resizeCanvas();
+    loop();
+  });
   </script>
 </body>
 </html>
