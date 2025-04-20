@@ -1,33 +1,29 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Smart Auto‑Crop Aramandi</title>
   <style>
-    body {
-      margin:0; padding:1em;
-      font-family:sans-serif; text-align:center;
-      background:#f0f0f0; color:#333;
-    }
+    body { margin:0; padding:1em; font-family:sans-serif; text-align:center; background:#f0f0f0; }
     h1 { margin-bottom:0.2em; }
-    p { margin-bottom:1em; }
+    p  { margin-bottom:1em; }
     #container {
-      position:relative;
+      position: relative;
       width:100%; max-width:360px;
-      margin:0 auto;
-      aspect-ratio:9/16;
-      background:#000;
-      overflow:hidden;
+      aspect-ratio:9/16; margin:0 auto;
+      background:#000; overflow:hidden;
     }
-    canvas {
+    video, canvas {
       position:absolute; top:0; left:0;
       width:100%; height:100%;
+      object-fit:cover;
     }
+    #overlay { pointer-events:none; }
     #countdown {
       position:absolute; top:8px; right:8px;
       background:rgba(0,0,0,0.6); color:#fff;
-      font-size:1.5em; padding:0.2em 0.5em;
+      padding:0.2em 0.5em; font-size:1.5em;
       border-radius:4px; display:none;
     }
     .controls {
@@ -36,8 +32,8 @@
     }
     .controls button {
       flex:1 1 140px; padding:0.6em; font-size:1em;
-      border:1px solid #888; background:#fff;
-      border-radius:4px; cursor:pointer;
+      border:1px solid #888; background:#fff; border-radius:4px;
+      cursor:pointer;
     }
     @media(min-width:600px) {
       .controls {
@@ -53,11 +49,8 @@
   <p>Get your full body in view—when your head clears the top slice and heels land on the orange bar, we auto‑capture.</p>
 
   <div id="container">
-    <!-- offscreen video input -->
-    <video id="video" autoplay playsinline style="display:none;"></video>
-    <!-- visible canvas -->
-    <canvas id="output"></canvas>
-    <!-- countdown display -->
+    <video id="video" autoplay playsinline></video>
+    <canvas id="overlay"></canvas>
     <div id="countdown"></div>
   </div>
 
@@ -70,177 +63,153 @@
   <!-- MediaPipe Pose -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-
   <script>
   (async()=>{
     const video = document.getElementById('video');
-    const canvas = document.getElementById('output');
-    const ctx    = canvas.getContext('2d');
-    const cdElem = document.getElementById('countdown');
-    const snapBtn= document.getElementById('snapBtn');
-    const recBtn = document.getElementById('recBtn');
-    const resetBtn = document.getElementById('resetBtn');
+    const canvas= document.getElementById('overlay');
+    const ctx   = canvas.getContext('2d');
+    const cd    = document.getElementById('countdown');
+    const snapBtn = document.getElementById('snapBtn');
+    const recBtn  = document.getElementById('recBtn');
+    const resetBtn= document.getElementById('resetBtn');
 
-    // set canvas size once we have video dimensions
+    // prompt for camera
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode:'user' }, audio:false
+    });
+    video.srcObject = stream;
     video.addEventListener('loadedmetadata',()=>{
       canvas.width  = video.videoWidth;
       canvas.height = video.videoHeight;
     });
 
-    // start camera (user will be prompted to allow)
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video:{ facingMode:'user' }, audio:false
-    });
-    video.srcObject = stream;
-
-    // state
-    let lastCapture=0;
+    // countdown helper
     let counting=false;
-
-    // helper for countdown
-    function startCountdown(sec, cb) {
-      cdElem.style.display = 'block';
-      let s=sec;
-      cdElem.textContent = s;
+    function startCountdown(sec, onDone){
+      counting=true;
+      cd.style.display='block';
+      let s=sec; cd.textContent=s;
       const iv = setInterval(()=>{
-        s--;
-        if(s>0) cdElem.textContent=s;
-        else {
-          clearInterval(iv);
-          cdElem.style.display='none';
-          cb();
-        }
+        s--, cd.textContent=s>0?s:'';
+        if(s<0){ clearInterval(iv); cd.style.display='none'; counting=false; onDone(); }
       },1000);
     }
 
-    // pose detector
+    // last capture timestamp—debounce auto snaps
+    let lastAuto=0;
+
+    // init MediaPipe Pose
     const pose = new Pose.Pose({
       locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`
     });
     pose.setOptions({
       modelComplexity:0,
       smoothLandmarks:true,
-      enableSegmentation:false,
       minDetectionConfidence:0.5,
       minTrackingConfidence:0.5
     });
-    pose.onResults(drawFrame);
+    pose.onResults(onPose);
 
-    // hook up camera utils to feed Pose
-    const camera = new Camera.Camera(video, {
+    // feed camera into Pose
+    const cam = new Camera.Camera(video, {
       onFrame: async()=> await pose.send({image:video}),
       width:720, height:1280
     });
-    camera.start();
+    cam.start();
 
-    // main draw loop
-    function drawFrame(results){
-      // if no pose, just blank
+    function onPose(results){
+      const W = canvas.width, H = canvas.height;
+      ctx.clearRect(0,0,W,H);
+
+      // draw raw video behind overlay
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(video,0,0,W,H);
+
       if(!results.poseLandmarks){
-        ctx.fillStyle='#000';
-        ctx.fillRect(0,0,canvas.width,canvas.height);
-        return;
+        return drawGuides(false);
       }
 
-      const lm = results.poseLandmarks;
-      // approximate head top: use nose y minus an offset in pixels
-      const noseY = lm[0].y * canvas.height;
-      const headTop = Math.max(0, noseY - (lm[0].y - lm[1].y) * canvas.height);
+      // estimate forehead y (nose_y minus nose-to-forehead offset)
+      const {y:x0} = results.poseLandmarks[0];  // NOSE
+      const {y:x1} = results.poseLandmarks[1];  // RIGHT_EYE_INNER as fallback
+      const approxForeheadY = (x0 - (x0 - x1)*0.6) * H;
 
       // heel midpoint
-      const lHeel = lm[27], rHeel = lm[28];
-      const heelY = Math.max(lHeel.y, rHeel.y)*canvas.height;
+      const L = results.poseLandmarks[27], R = results.poseLandmarks[28];
+      const heelY = Math.max(L.y,R.y) * H;
 
-      // define crop box [x: full width]
-      const crop = {
-        x:0, width:canvas.width,
-        y:headTop, height:heelY-headTop
-      };
+      // store in closure for guides
+      window._headY = approxForeheadY;
+      window._heelY = heelY;
 
-      // draw the cropped, stretched to fill
-      ctx.drawImage(
-        video,
-        crop.x, crop.y, crop.width, crop.height,
-        0, 0, canvas.width, canvas.height
-      );
+      // now draw overlay guides
+      drawGuides(approxForeheadY <= H/8 && heelY >= 7*H/8);
 
-      // now overlay the guides
-      const H = canvas.height, W = canvas.width;
-      const slice = H/8;
+      // auto‑capture if valid for 5 s and >5 s since last
+      if(!counting && approxForeheadY <= H/8 && heelY >= 7*H/8){
+        const now=Date.now();
+        if(now - lastAuto > 5000){
+          lastAuto = now;
+          startCountdown(5, ()=>snap());
+        }
+      }
+    }
 
-      // check criteria
-      const headOK = (headTop <= slice*0.5);        // head *above* first slice
-      const heelOK = (heelY >= H - slice*0.5);      // heel *on* last slice
+    function drawGuides(valid){
+      const W=canvas.width, H=canvas.height;
+      const slice=H/8;
 
       // border
-      ctx.lineWidth = 8;
-      ctx.strokeStyle = (headOK&&heelOK) ? 'lime' : 'red';
+      ctx.lineWidth=8;
+      ctx.strokeStyle = valid ? 'lime' : 'red';
       ctx.strokeRect(0,0,W,H);
 
-      // 8‐slice horizontal
-      ctx.lineWidth = 3;
+      // dashed horizontal slices
+      ctx.lineWidth=3;
       ctx.setLineDash([6,4]);
-      ctx.strokeStyle = (headOK&&heelOK) ? 'lime' : 'red';
+      ctx.strokeStyle = valid ? 'lime' : 'red';
       for(let i=1;i<8;i++){
         const y=i*slice;
-        ctx.beginPath();
-        ctx.moveTo(0,y);
-        ctx.lineTo(W,y);
-        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
       }
       ctx.setLineDash([]);
 
-      // orange landing bar at bottom slice
+      // orange bar on bottom slice
       ctx.fillStyle='orange';
       ctx.fillRect(0,7*slice, W, slice);
-
-      // auto‑trigger a capture once
-      if(headOK&&heelOK && !counting && Date.now()-lastCapture>5000){
-        counting = true;
-        startCountdown(5, ()=>{ snap(); counting=false; });
-      }
     }
 
     function snap(){
-      lastCapture = Date.now();
-      const img = canvas.toDataURL('image/png');
       const a = document.createElement('a');
-      a.href = img;
-      a.download = 'aramandi.png';
+      a.href = canvas.toDataURL('image/png');
+      a.download='aramandi.png';
       a.click();
     }
 
-    // manual buttons
-    snapBtn.addEventListener('click',()=>{
+    snapBtn .addEventListener('click',()=>{
       if(counting)return;
-      counting=true;
-      startCountdown(5,()=>{
-        snap(); counting=false;
-      });
+      startCountdown(5, ()=>snap());
     });
-    recBtn.addEventListener('click',()=>{
+    recBtn .addEventListener('click',()=>{
       if(counting)return;
-      counting=true;
-      startCountdown(5,()=>{
-        // record 10 s
+      startCountdown(5, ()=>{
         const rec = new MediaRecorder(stream, {mimeType:'video/webm'});
-        const chunks=[];
-        rec.ondataavailable = e=>chunks.push(e.data);
+        const parts = [];
+        rec.ondataavailable = e=>parts.push(e.data);
         rec.onstop = ()=>{
-          const blob=new Blob(chunks,{type:'video/webm'});
-          const u=URL.createObjectURL(blob);
+          const blob=new Blob(parts,{type:'video/webm'});
+          const url=URL.createObjectURL(blob);
           const a=document.createElement('a');
-          a.href=u; a.download='aramandi.webm'; a.click();
-          URL.revokeObjectURL(u);
+          a.href=url; a.download='aramandi.webm'; a.click();
+          URL.revokeObjectURL(url);
         };
         rec.start();
         setTimeout(()=>rec.state!=='inactive'&&rec.stop(),10000);
-        counting=false;
       });
     });
     resetBtn.addEventListener('click',()=>{
       counting=false;
-      cdElem.style.display='none';
+      cd.style.display='none';
     });
 
   })();
