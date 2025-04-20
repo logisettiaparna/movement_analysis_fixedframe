@@ -8,20 +8,29 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { background: #f7f7f7; font-family: sans-serif; color: #333; text-align: center; padding: 1em; }
     h1 { margin-bottom: 0.2em; }
-    p { margin-bottom: 1em; }
+    p  { margin-bottom: 1em; }
+
     #camera-container {
       position: relative;
       margin: 0 auto;
-      width: 100%; max-width: 360px;
+      width: 100%;
+      max-width: 360px;
+      /* force 9:16 container ratio */
       aspect-ratio: 9 / 16;
       background: #000;
       overflow: hidden;
     }
+
+    /* make video & canvas letterbox so overlay lines up exactly */
     video, canvas {
-      position: absolute; top: 0; left: 0;
+      position: absolute;
+      top: 0; left: 0;
       width: 100%; height: 100%;
-      object-fit: cover;
+      object-fit: contain;
+      /* black bars on top/bottom or sides if needed */
+      background: black;
     }
+
     .btn-container {
       display: flex;
       justify-content: center;
@@ -48,17 +57,19 @@
     }
   </style>
 </head>
+
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
   <p>Frame your full body—when your head &amp; feet hit the 1st &amp; 8th slices, we’ll auto‑capture.</p>
 
   <div id="camera-container">
-    <video id="video" autoplay playsinline muted></video>
+    <video  id="video" autoplay playsinline muted></video>
     <canvas id="overlay"></canvas>
   </div>
 
   <div class="btn-container">
-    <button id="force-ok">✅ Force “in‑frame”</button>
+    <!-- for testing/demo only: force the “in frame” condition -->
+    <button id="force-ok">✅ Force “In Frame”</button>
   </div>
 
   <script>
@@ -67,53 +78,49 @@
     const ctx        = overlay.getContext('2d');
     const forceOkBtn = document.getElementById('force-ok');
 
-    let userAllowed = false;
-    let autoCapturing = false;
+    let inFrame      = false;
+    let autoCapturing= false;
 
-    // --- 1) get camera ---
+    // 1) Ask for camera
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false })
-      .then(stream => {
-        video.srcObject = stream;
-        userAllowed = true;
-      })
-      .catch(err => alert("❌ Camera access denied"));
+      .then(s => { video.srcObject = s; })
+      .catch(_ => alert("❌ Camera access is required."));
 
-    // --- 2) size canvas to video ---
+    // 2) Once we know the real video dimensions, size the canvas
     video.addEventListener('loadedmetadata', () => {
       overlay.width  = video.videoWidth;
       overlay.height = video.videoHeight;
       requestAnimationFrame(drawOverlay);
     });
 
-    // --- stub full‐body check (wire in Pose/FaceMesh here!) ---
-    let pretendInFrame = false;
-    forceOkBtn.onclick = () => pretendInFrame = true;
-    function fullBodyVisible() {
-      return pretendInFrame;
+    // Demo stub — replace with your real Pose/FaceMesh check!
+    forceOkBtn.onclick = ()=> inFrame = true;
+    function fullBodyVisible(){
+      return inFrame;
     }
 
-    // --- 3) draw overlay ---
-    function drawOverlay() {
+    // 3) Main overlay loop
+    function drawOverlay(){
       const W = overlay.width, H = overlay.height;
-      ctx.clearRect(0,0,W,H);
+      ctx.clearRect(0,0, W,H);
 
       if (!fullBodyVisible()) {
-        // big orange plate at bottom 20%
-        const plateH = H * 0.20;
+        // orange plate at bottom 10%
+        const plateH = H * 0.10;
         ctx.fillStyle = 'orange';
         ctx.fillRect(0, H-plateH, W, plateH);
 
         ctx.fillStyle = 'white';
-        ctx.font      = `bold ${plateH*0.5|0}px sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('Stand here →', W/2, H - plateH/2);
+        ctx.textAlign   = 'center';
+        ctx.textBaseline= 'middle';
+        ctx.font        = `bold ${plateH*0.5|0}px sans-serif`;
+        ctx.fillText('Stand here →', W/2, H-plateH/2);
 
       } else if (!autoCapturing) {
-        // show green horizontal 8‑slice guide
+        // green 8‑slice guide
         const seg = H/8;
-        ctx.lineWidth   = 2;
         ctx.strokeStyle = 'lime';
+        ctx.lineWidth   = 2;
         ctx.setLineDash([4,4]);
         for(let i=1;i<8;i++){
           const y = seg*i;
@@ -123,33 +130,30 @@
           ctx.stroke();
         }
         ctx.setLineDash([]);
-        // once it's visible, kick off capture
+
+        // now lock and start countdown
         autoCapturing = true;
         startCountdown();
 
-      } else {
-        // during countdown we overlay the number
-        // (handled inside startCountdown)
       }
-
       requestAnimationFrame(drawOverlay);
     }
 
-    // --- 4) countdown + capture ---
-    function startCountdown() {
-      let s = 5;
-      const iv = setInterval(()=>{
-        if (s>0) {
-          // darken + big number
+    // 4) countdown + snap
+    function startCountdown(){
+      let secs = 5;
+      const timer = setInterval(()=>{
+        if (secs>0){
+          // shade + big number
           ctx.fillStyle = 'rgba(0,0,0,0.5)';
           ctx.fillRect(0,0,overlay.width,overlay.height);
           ctx.fillStyle = 'white';
           ctx.font      = 'bold 120px sans-serif';
           ctx.textAlign = 'center';
-          ctx.fillText(s, overlay.width/2, overlay.height/2);
-          s--;
+          ctx.fillText(secs, overlay.width/2, overlay.height/2);
+          secs--;
         } else {
-          clearInterval(iv);
+          clearInterval(timer);
           capturePhoto();
         }
       },1000);
@@ -160,9 +164,9 @@
       c.width  = video.videoWidth;
       c.height = video.videoHeight;
       c.getContext('2d').drawImage(video,0,0);
-      c.toBlob(b=>{
+      c.toBlob(blob=>{
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(b);
+        a.href = URL.createObjectURL(blob);
         a.download = 'aramandi.png';
         a.click();
         URL.revokeObjectURL(a.href);
