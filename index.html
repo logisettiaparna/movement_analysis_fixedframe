@@ -36,7 +36,7 @@
     }
   </style>
 
-  <!-- 1) Load MediaPipe Pose -->
+  <!-- MediaPipe Pose & Camera Utils -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 </head>
@@ -64,26 +64,24 @@
     const btnMan   = document.getElementById('manual');
     const fb       = document.getElementById('feedback');
 
-    let inFrame = false, holdTimer = null;
+    let inFrame=false, holdTimer=null;
 
-    // Resize canvas once video metadata is ready
-    video.addEventListener('loadedmetadata', () => {
+    video.addEventListener('loadedmetadata', ()=>{
       overlay.width  = video.videoWidth;
       overlay.height = video.videoHeight;
       drawOverlay();
     });
 
-    // Draw slices, bar, and border
-    function drawOverlay(){
-      const W = overlay.width, H = overlay.height, seg = H/8;
+    function drawOverlay(foreheadPt, heelPt){
+      const W=overlay.width, H=overlay.height, seg=H/8;
       ctx.clearRect(0,0,W,H);
 
-      // 1–7 dashed yellow slices
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = 'yellow';
+      // dashed yellow slices 1–7
+      ctx.lineWidth=2;
+      ctx.strokeStyle='yellow';
       ctx.setLineDash([5,5]);
-      ctx.font = '18px sans-serif';
-      ctx.fillStyle = 'yellow';
+      ctx.font='18px sans-serif';
+      ctx.fillStyle='yellow';
       for(let i=1;i<8;i++){
         const y=seg*i;
         ctx.beginPath();
@@ -94,22 +92,36 @@
       }
       ctx.setLineDash([]);
 
-      // slice 8 = solid orange bar
+      // solid orange bar = slice 8
       ctx.fillStyle='orange';
       ctx.fillRect(0,seg*7,W,seg);
 
-      // thick border
+      // Border
       ctx.lineWidth=6;
-      ctx.strokeStyle = inFrame?'lime':'red';
+      ctx.strokeStyle=inFrame?'lime':'red';
       ctx.strokeRect(0,0,W,H);
+
+      // Draw forehead & heel circles
+      if(foreheadPt){
+        ctx.fillStyle='white';
+        ctx.beginPath();
+        ctx.arc(foreheadPt.x, foreheadPt.y, 8,0,2*Math.PI);
+        ctx.fill();
+        ctx.fillText('👤', foreheadPt.x+10, foreheadPt.y-10);
+      }
+      if(heelPt){
+        ctx.fillStyle='white';
+        ctx.beginPath();
+        ctx.arc(heelPt.x, heelPt.y, 8,0,2*Math.PI);
+        ctx.fill();
+        ctx.fillText('👣', heelPt.x+10, heelPt.y-10);
+      }
     }
 
-    // Feedback text
     function updateFeedback(msg){
       fb.textContent = msg;
     }
 
-    // Snapshot helper
     function takeSnapshot(){
       const c=document.createElement('canvas');
       c.width=video.videoWidth; c.height=video.videoHeight;
@@ -122,8 +134,7 @@
       },'image/png');
     }
 
-    // Countdown utility
-    function countdown(sec, onTick, onDone){
+    function countdown(sec,onTick,onDone){
       onTick(sec);
       let s=sec;
       const tid=setInterval(()=>{
@@ -137,7 +148,6 @@
       return tid;
     }
 
-    // Manual capture
     btnMan.addEventListener('click',()=>{
       btnMan.disabled=true;
       countdown(5,
@@ -150,42 +160,64 @@
       );
     });
 
-    // Reset
     btnReset.addEventListener('click',()=>{
       inFrame=false;
       clearTimeout(holdTimer);
       updateFeedback('Position the camera.');
     });
 
-    // Called on each Mediapipe result
     function onResults(results){
-      drawOverlay();
-      if(!results.poseLandmarks) return;
+      let fPt=null, hPt=null;
+      const W=overlay.width, H=overlay.height, seg=H/8;
 
-      const lm = results.poseLandmarks, H=overlay.height, seg=H/8;
-      // forehead = landmark 10 (fallback to nose tip 0)
-      const f = lm[10]||lm[0], fy=f.y*H;
-      // heel midpoint
-      const lh=lm[mp_pose.PoseLandmark.LEFT_HEEL.value],
-            rh=lm[mp_pose.PoseLandmark.RIGHT_HEEL.value],
-            hy=((lh.y+rh.y)/2)*H;
-      const topY=seg*1, barTop=seg*7, barBot=seg*8;
+      // Forehead: try FaceMesh LM10 → fallback to inner eyes
+      if(results.multiFaceLandmarks && results.multiFaceLandmarks[0]){
+        const fl = results.multiFaceLandmarks[0].landmark;
+        fPt = { x:fl[10].x*W, y:fl[10].y*H };
+      } else if(results.poseLandmarks){
+        const lm=results.poseLandmarks;
+        const LE=lm[mp_pose.PoseLandmark.LEFT_EYE_INNER.value],
+              RE=lm[mp_pose.PoseLandmark.RIGHT_EYE_INNER.value],
+              NO=lm[mp_pose.PoseLandmark.NOSE.value];
+        const ex=(LE.x+RE.x)/2, ey=(LE.y+RE.y)/2,
+              d=(NO.y-ey), fy=ey-d;
+        fPt={ x:ex*W, y:fy*H };
+      }
 
-      const headOk = fy<topY;
-      const heelOk = hy>=barTop && hy<=barBot;
+      // Heel midpoint
+      if(results.poseLandmarks){
+        const lm=results.poseLandmarks;
+        const LH=lm[mp_pose.PoseLandmark.LEFT_HEEL.value],
+              RH=lm[mp_pose.PoseLandmark.RIGHT_HEEL.value];
+        const hx=((LH.x+RH.x)/2)*W,
+              hy=((LH.y+RH.y)/2)*H;
+        hPt={ x:hx, y:hy };
+      }
 
-      if(!headOk){
+      // draw everything
+      drawOverlay(fPt,hPt);
+
+      if(!fPt || !hPt){
+        inFrame=false;
+        updateFeedback('No person detected.');
+        return;
+      }
+
+      // Check against slice 1 & bar
+      const headOK = fPt.y < seg*1;
+      const healOK = hPt.y >= seg*7 && hPt.y <= seg*8;
+
+      if(!headOK){
         inFrame=false;
         updateFeedback('Move forehead above top slice.');
-      } else if(!heelOk){
+      } else if(!healOK){
         inFrame=false;
         updateFeedback('Place heels on the orange bar.');
       } else if(!inFrame){
         inFrame=true;
         updateFeedback('IN FRAME! Hold 10 s…');
-        // auto‑capture after 10s
         holdTimer = countdown(10,
-          s=>updateFeedback(`Auto in ${s}…`),
+          s=>updateFeedback(`Auto capture in ${s}…`),
           ()=>{
             takeSnapshot();
             updateFeedback('Captured!');
@@ -194,7 +226,7 @@
       }
     }
 
-    // **FIX**: Use `new Pose(...)`, not `new Pose.Pose(...)`
+    // **IMPORTANT**: instantiate Pose as `new Pose(...)`
     const pose = new Pose({
       locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`
     });
@@ -206,19 +238,16 @@
     });
     pose.onResults(onResults);
 
-    // Ask for camera and hook into MediaPipe
     const camera = new Camera.Camera(video,{
       onFrame: async()=>await pose.send({image:video}),
-      width:720,
-      height:1280
+      width:720, height:1280
     });
-    camera.start().then(()=>{
-      updateFeedback('Position the camera.');
-      drawOverlay();
-    }).catch(err=>{
-      updateFeedback('❗ Camera access denied');
-      console.error(err);
-    });
+    camera.start()
+      .then(()=>{ updateFeedback('Position the camera.'); })
+      .catch(err=>{
+        updateFeedback('❗ Camera access denied');
+        console.error(err);
+      });
   </script>
 </body>
 </html>
