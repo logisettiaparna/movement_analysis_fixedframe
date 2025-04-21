@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Smart Auto‑Crop Aramandi</title>
   <style>
-    * { box-sizing:border-box; margin:0; padding:0 }
+    * { box‑sizing:border-box; margin:0; padding:0 }
     body { background:#f7f7f7; font-family:sans-serif; color:#333; text-align:center; padding:1em }
     h1 { margin-bottom:0.2em }
     p  { margin-bottom:1em }
@@ -39,7 +39,7 @@
   <h1>Smart Auto‑Crop Aramandi</h1>
   <p>
     Get full‑body in view — forehead clears the top slice and heels land on the orange bar → “IN FRAME!”  
-    Then tap “Capture (5 s)” to grab your standing, and again for your Aramandi pose.
+    Then tap “Capture (5 s)” to grab your standing, and again for your Aramandi pose.
   </p>
 
   <div id="camera-container">
@@ -49,7 +49,7 @@
 
   <div class="controls">
     <button id="resetBtn">🔄 Start Over</button>
-    <button id="manualBtn">📸 Capture (5 s)</button>
+    <button id="manualBtn">📸 Capture (5 s)</button>
   </div>
   <div id="feedback">Loading…</div>
 
@@ -87,7 +87,7 @@
       // orange bar
       ctx.fillStyle='rgba(255,165,0,0.5)';
       ctx.fillRect(0,barY,W,seg);
-      // dots
+      // forehead & heel dots
       if(lm){
         const fx=lm.forehead.x*W, fy=lm.forehead.y*H;
         const hx=lm.heelMid.x*W,  hy=lm.heelMid.y*H;
@@ -134,7 +134,7 @@
 
     resetBtn.onclick = ()=> window.location.reload();
 
-    // camera start
+    // camera init
     try{
       const s=await navigator.mediaDevices.getUserMedia({
         video:{ facingMode:'user',width:W,height:H },audio:false
@@ -150,15 +150,13 @@
     updateFeedback('Align forehead & heels to take STANDING pose','red');
     document.querySelector('#camera-container').style.borderColor='red';
 
-    // Mediapipe
+    // Mediapipe setup
     const pose=new Pose({
       locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${f}`
     });
     pose.setOptions({
-      selfieMode:true,modelComplexity:1,
-      smoothLandmarks:true,
-      minDetectionConfidence:0.5,
-      minTrackingConfidence:0.5
+      selfieMode:true, modelComplexity:1, smoothLandmarks:true,
+      minDetectionConfidence:0.5, minTrackingConfidence:0.5
     });
 
     pose.onResults(results=>{
@@ -169,9 +167,11 @@
               ey=(p[1].y+p[4].y)/2,
               ny=p[0].y,
               fy=ey-(ny-ey),
-              lh=p[27],rh=p[28];
-        lm={ forehead:{x:ex,y:fy},
-             heelMid:{x:(lh.x+rh.x)/2,y:(lh.y+rh.y)/2} };
+              lh=p[27], rh=p[28];
+        lm={
+          forehead:{x:ex,y:fy},
+          heelMid: {x:(lh.x+rh.x)/2, y:(lh.y+rh.y)/2}
+        };
       }
 
       drawOverlay(lm);
@@ -180,17 +180,19 @@
       let inFrame=false;
       if(lm){
         if(phase==='standing'){
-          // both forehead above slice 1 AND heel midpoint in orange bar
-          inFrame = lm.forehead.y*H<seg && lm.heelMid.y*H>barY;
+          // STANDING: forehead **and** heel
+          inFrame = lm.forehead.y*H < seg
+                  && lm.heelMid.y*H  > barY;
         } else {
-          // Aramandi: ONLY heel midpoint in orange bar
-          inFrame = lm.heelMid.y*H>barY;
+          // ARAMANDI: **only** heel
+          inFrame = lm.heelMid.y*H > barY;
         }
       }
 
       if(inFrame){
         if(feedbackState!=='in'){
-          document.querySelector('#camera-container').style.borderColor='lime';
+          document.querySelector('#camera-container')
+                  .style.borderColor='lime';
           if(phase==='standing'){
             updateFeedback('IN FRAME — tap “Capture” to grab STANDING','lime');
           } else {
@@ -206,13 +208,14 @@
               : 'Align heels for ARAMANDI'
             ,'red'
           );
-          document.querySelector('#camera-container').style.borderColor='red';
+          document.querySelector('#camera-container')
+                  .style.borderColor='red';
           feedbackState='out';
         }
       }
     });
 
-    // camera loop
+    // start camera→pose
     new Camera(video,{
       onFrame:async()=>await pose.send({image:video}),
       width:W,height:H
