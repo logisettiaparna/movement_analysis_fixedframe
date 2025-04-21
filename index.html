@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Smart Auto‑Crop Aramandi</title>
   <style>
-    * { box-sizing:border-box; margin:0; padding:0 }
+    * { box-sizing: border-box; margin:0; padding:0 }
     body { background:#f7f7f7; font-family:sans-serif; color:#333; text-align:center; padding:1em }
     h1 { margin-bottom:0.2em }
     p  { margin-bottom:1em }
@@ -16,13 +16,16 @@
       position:relative;
       width:100%; max-width:360px;
       aspect-ratio:9/16;
-      background:#000; overflow:hidden;
+      background:#000;
+      overflow:hidden;
     }
     video, canvas {
       position:absolute; top:0; left:0;
       width:100%; height:100%;
       object-fit:cover;
     }
+    /* make sure our canvas is transparent */
+    canvas { background:transparent; pointer-events:none; }
     .controls {
       display:flex; flex-direction:column; gap:0.5em;
       width:140px;
@@ -35,6 +38,7 @@
     .feedback { margin-top:0.5em; font-size:1.1em; font-weight:bold }
     @media(min-width:600px) {
       .wrapper { flex-wrap:nowrap }
+      .controls { margin-left:1em }
     }
   </style>
 
@@ -43,7 +47,7 @@
 </head>
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Get your full body in view — forehead above the top slice and heels on the orange bar → “IN FRAME!” Hold 10 s to auto‑capture.</p>
+  <p>Get your full body in view — forehead above the top slice and heels on the orange bar → “IN FRAME!” Hold 10 s to auto‑capture.</p>
 
   <div class="wrapper">
     <div id="camera-container">
@@ -52,7 +56,7 @@
     </div>
     <div class="controls">
       <button id="reset">🔄 Reset</button>
-      <button id="manual">📸 Manual (5 s)</button>
+      <button id="manual">📸 Manual (5 s)</button>
       <div class="feedback" id="feedback">Loading…</div>
     </div>
   </div>
@@ -65,19 +69,27 @@
     const btnMan   = document.getElementById('manual');
     const fb       = document.getElementById('feedback');
 
-    let inFrame = false, holdTimer = null;
+    let inFrame = false,
+        holdTimer = null;
 
-    // draw slices, bar, border, keypoints
+    function updateFeedback(txt) {
+      fb.textContent = txt;
+    }
+
     function drawOverlay(fPt, hPt) {
-      const W = overlay.width, H = overlay.height, seg = H/8;
+      const W = overlay.width,
+            H = overlay.height,
+            seg = H/8;
+
+      // clear only
       ctx.clearRect(0,0,W,H);
 
-      // dashed slices 1–7
+      // dashed yellow slices 1–7
+      ctx.setLineDash([5,5]);
       ctx.lineWidth = 2;
       ctx.strokeStyle = 'yellow';
-      ctx.setLineDash([5,5]);
-      ctx.font = '18px sans-serif';
-      ctx.fillStyle = 'yellow';
+      ctx.font        = '18px sans-serif';
+      ctx.fillStyle   = 'yellow';
       for(let i=1; i<8; i++){
         const y = seg*i;
         ctx.beginPath();
@@ -88,83 +100,76 @@
       }
       ctx.setLineDash([]);
 
-      // orange bar = bottom slice
+      // solid orange bar at slice 8
       ctx.fillStyle = 'orange';
       ctx.fillRect(0, seg*7, W, seg);
 
-      // border
+      // thick border
       ctx.lineWidth = 6;
       ctx.strokeStyle = inFrame ? 'lime' : 'red';
       ctx.strokeRect(0,0,W,H);
 
-      // forehead & heel circles
+      // forehead dot
       if(fPt){
         ctx.fillStyle = 'white';
         ctx.beginPath();
-        ctx.arc(fPt.x, fPt.y, 8, 0, 2*Math.PI);
+        ctx.arc(fPt.x,fPt.y,8,0,2*Math.PI);
         ctx.fill();
-        ctx.fillText('👤', fPt.x+10, fPt.y-10);
+        ctx.fillText('👤',fPt.x+10,fPt.y-10);
       }
+      // heel‑mid dot
       if(hPt){
         ctx.fillStyle = 'white';
         ctx.beginPath();
-        ctx.arc(hPt.x, hPt.y, 8, 0, 2*Math.PI);
+        ctx.arc(hPt.x,hPt.y,8,0,2*Math.PI);
         ctx.fill();
-        ctx.fillText('👣', hPt.x+10, hPt.y-10);
+        ctx.fillText('👣',hPt.x+10,hPt.y-10);
       }
     }
 
-    function updateFeedback(msg){
-      fb.textContent = msg;
+    function countdown(sec, onTick, onDone) {
+      onTick(sec);
+      let s = sec;
+      const id = setInterval(()=>{
+        s--;
+        onTick(s);
+        if(s<=0){
+          clearInterval(id);
+          onDone();
+        }
+      },1000);
+      return id;
     }
 
-    function takeSnapshot(){
+    function takeSnapshot() {
       const c = document.createElement('canvas');
-      c.width = video.videoWidth;
-      c.height= video.videoHeight;
+      c.width  = video.videoWidth;
+      c.height = video.videoHeight;
       c.getContext('2d').drawImage(video,0,0);
       c.toBlob(blob=>{
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = 'aramandi.png';
         a.click();
-      }, 'image/png');
+      },'image/png');
     }
 
-    function countdown(sec, onTick, onDone) {
-      onTick(sec);
-      let s = sec;
-      const tid = setInterval(()=>{
-        s--;
-        onTick(s);
-        if(s<=0){
-          clearInterval(tid);
-          onDone();
-        }
-      },1000);
-      return tid;
-    }
+    btnReset.addEventListener('click', ()=>{
+      inFrame = false;
+      clearTimeout(holdTimer);
+      updateFeedback('Position the camera');
+    });
 
-    btnMan.addEventListener('click', () => {
+    btnMan.addEventListener('click', ()=>{
       btnMan.disabled = true;
       countdown(5,
         s => updateFeedback(`Manual in ${s}…`),
-        ()=>{
-          takeSnapshot();
-          updateFeedback('Manual done.');
-          btnMan.disabled = false;
-        }
+        ()=>{ takeSnapshot(); updateFeedback('Manual done'); btnMan.disabled = false; }
       );
     });
 
-    btnReset.addEventListener('click', () => {
-      inFrame = false;
-      clearTimeout(holdTimer);
-      updateFeedback('Position the camera.');
-    });
-
-    // Mediapipe Pose setup
-    const pose = new Pose.Pose({
+    // instantiate Pose *directly* (not Pose.Pose)
+    const pose = new Pose({
       locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`
     });
     pose.setOptions({
@@ -173,83 +178,82 @@
       minDetectionConfidence: 0.5,
       minTrackingConfidence: 0.5
     });
-
     pose.onResults(results => {
-      const W = overlay.width, H = overlay.height, seg = H/8;
-      let fPt = null, hPt = null;
+      const W = overlay.width,
+            H = overlay.height,
+            seg = H/8;
 
-      // Forehead LM10 or eye‑inner fallback
+      let fPt = null, hPt = null;
+      // face‑mesh landmark #10 if available
       if(results.multiFaceLandmarks?.length){
         const lm = results.multiFaceLandmarks[0].landmark[10];
         fPt = { x:lm.x*W, y:lm.y*H };
       } else if(results.poseLandmarks){
+        // fallback from pose: reflect nose over eye‐center
         const lm = results.poseLandmarks;
-        const LE = lm[mp_pose.PoseLandmark.LEFT_EYE_INNER.value],
-              RE = lm[mp_pose.PoseLandmark.RIGHT_EYE_INNER.value],
-              NO = lm[mp_pose.PoseLandmark.NOSE.value];
-        const ex = (LE.x+RE.x)/2, ey = (LE.y+RE.y)/2,
-              d  = NO.y - ey;
-        fPt = { x:ex*W, y:(ey - d)*H };
+        const le=lm[mp_pose.PoseLandmark.LEFT_EYE_INNER.value],
+              re=lm[mp_pose.PoseLandmark.RIGHT_EYE_INNER.value],
+              no=lm[mp_pose.PoseLandmark.NOSE.value];
+        const ex=(le.x+re.x)/2, ey=(le.y+re.y)/2,
+              d = no.y - ey;
+        fPt = { x:ex*W, y:(ey-d)*H };
       }
-
       // heel midpoint
       if(results.poseLandmarks){
-        const lm = results.poseLandmarks;
-        const LH = lm[mp_pose.PoseLandmark.LEFT_HEEL.value],
-              RH = lm[mp_pose.PoseLandmark.RIGHT_HEEL.value];
-        hPt = {
-          x: ((LH.x+RH.x)/2)*W,
-          y: ((LH.y+RH.y)/2)*H
-        };
+        const lm=results.poseLandmarks;
+        const lh=lm[mp_pose.PoseLandmark.LEFT_HEEL.value],
+              rh=lm[mp_pose.PoseLandmark.RIGHT_HEEL.value];
+        hPt = { x:((lh.x+rh.x)/2)*W, y:((lh.y+rh.y)/2)*H };
       }
 
       drawOverlay(fPt,hPt);
 
       if(!fPt || !hPt){
         inFrame = false;
-        updateFeedback('No person detected.');
+        updateFeedback('No person detected');
         return;
       }
       const headOK = fPt.y < seg*1;
-      const healOK = hPt.y >= seg*7 && hPt.y <= seg*8;
+      const heelOK = hPt.y >= seg*7 && hPt.y <= seg*8;
 
       if(!headOK){
-        inFrame=false;
-        updateFeedback('Move forehead above top slice.');
+        inFrame = false;
+        updateFeedback('Move forehead above top slice');
       }
-      else if(!healOK){
-        inFrame=false;
-        updateFeedback('Place heels on the orange bar.');
+      else if(!heelOK){
+        inFrame = false;
+        updateFeedback('Place heels on the orange bar');
       }
       else if(!inFrame){
+        // just became in‑frame
         inFrame = true;
-        updateFeedback('IN FRAME! Hold 10 s…');
+        updateFeedback('IN FRAME! Hold 10 s…');
         holdTimer = countdown(10,
-          s=>updateFeedback(`Auto capture in ${s}…`),
+          s=>updateFeedback(`Auto in ${s}…`),
           ()=>{ takeSnapshot(); updateFeedback('Captured!'); }
         );
       }
     });
 
-    // ask for camera, then start loop
-    navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user' } })
+    // ask for camera, prompt appears here
+    navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user' }})
       .then(stream=>{
         video.srcObject = stream;
-        video.onloadeddata = () => {
+        video.onloadeddata = ()=>{
           overlay.width  = video.videoWidth;
           overlay.height = video.videoHeight;
           video.play();
-          updateFeedback('Position the camera.');
-          // frame loop
+          updateFeedback('Position the camera');
+          // run the detection loop
           (function loop(){
-            pose.send({image: video});
+            pose.send({ image: video });
             requestAnimationFrame(loop);
           })();
         };
       })
-      .catch(err=>{
-        console.error(err);
-        updateFeedback('❗ Camera access required.');
+      .catch(e=>{
+        console.error(e);
+        updateFeedback('❗ Camera access required');
       });
   </script>
 </body>
