@@ -14,7 +14,7 @@
       margin: 0 auto;
       width: 90vw;
       max-width: 360px;
-      aspect-ratio: 9/16; /* 360×640 */
+      aspect-ratio: 9/16;
       background: #000;
       overflow: hidden;
       border: 6px solid red;
@@ -49,7 +49,7 @@
 </head>
 <body>
   <h1>Smart Auto‑Crop Aramandi</h1>
-  <p>Get full‑body in view — forehead clears the top slice and heels land in the orange bar → “IN FRAME!”  Hold 10 s to auto‑capture.</p>
+  <p>Get full‑body in view — forehead clears the top slice and heels land on the orange bar → “IN FRAME!”  Then tap “Manual” to capture.</p>
 
   <div id="camera-container">
     <video id="video" autoplay muted playsinline></video>
@@ -68,18 +68,16 @@
 
   <script>
   (async()=>{
-    const video    = document.getElementById('video');
-    const canvas   = document.getElementById('overlay');
-    const ctx      = canvas.getContext('2d');
-    const resetBtn = document.getElementById('resetBtn');
-    const manualBtn= document.getElementById('manualBtn');
-    const fb       = document.getElementById('feedback');
+    const video     = document.getElementById('video');
+    const canvas    = document.getElementById('overlay');
+    const ctx       = canvas.getContext('2d');
+    const resetBtn  = document.getElementById('resetBtn');
+    const manualBtn = document.getElementById('manualBtn');
+    const fb        = document.getElementById('feedback');
     const W=360, H=640, seg=H/8, barY=seg*7;
 
-    let inFrameStart = null;
-    let autoTimer    = null;
-    let manualTimer  = null;
-    let capturing    = false;
+    let feedbackState = 'init';  // 'init' | 'in' | 'out'
+    let manualTimer   = null;
 
     function updateFeedback(msg, color='#333'){
       fb.textContent = msg;
@@ -87,9 +85,10 @@
     }
 
     // draw slices, bar, and border
-    function drawOverlay(landmarks){
+    function drawOverlay(lm){
       ctx.clearRect(0,0,W,H);
-      // slices
+
+      // 1) eight ‑ head slices
       ctx.strokeStyle = 'yellow';
       ctx.lineWidth   = 2;
       ctx.setLineDash([6,4]);
@@ -98,86 +97,69 @@
       for(let i=1;i<8;i++){
         const y=seg*i;
         ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
-        ctx.fillText(String(i), 10, y-5);
+        ctx.fillText(String(i),10,y-5);
       }
       ctx.setLineDash([]);
-      // orange bar
+
+      // 2) semi‑opaque orange bar
       ctx.fillStyle = 'rgba(255,165,0,0.5)';
       ctx.fillRect(0, barY, W, seg);
 
-      // if we have landmarks, mark forehead & heel mid
-      if(landmarks){
-        const fh=landmarks.forehead, hm=landmarks.heelMid;
-        const fx=fh.x*W, fy=fh.y*H;
-        const hx=hm.x*W, hy=hm.y*H;
-        ctx.fillStyle='cyan';
+      // 3) if we have landmarks, mark forehead & heel mid
+      if(lm){
+        const fx = lm.forehead.x * W, fy = lm.forehead.y * H;
+        const hx = lm.heelMid.x  * W, hy = lm.heelMid.y  * H;
+        ctx.fillStyle = 'cyan';
         ctx.beginPath(); ctx.arc(fx,fy,6,0,2*Math.PI); ctx.fill();
         ctx.beginPath(); ctx.arc(hx,hy,6,0,2*Math.PI); ctx.fill();
       }
     }
 
-    // check if in‑frame
-    function checkInFrame(lm){
+    // check if forehead above slice‑1 and heel in bar
+    function isInFrame(lm){
       if(!lm) return false;
-      const fy = lm.forehead.y*H;
-      const hy = lm.heelMid.y  *H;
-      return fy < seg && hy > barY;
+      return lm.forehead.y*H < seg && lm.heelMid.y*H > barY;
     }
 
-    // attempt capture
-    function attemptAutoCapture(){
-      if(inFrameStart===null){
-        inFrameStart = performance.now();
-        updateFeedback('IN FRAME – hold 10 s', 'lime');
-      }
-      const elapsed = (performance.now()-inFrameStart)/1000;
-      if(elapsed>=10 && !capturing){
-        capturing=true;
-        captureImage();
-      }
-    }
-    function resetAuto(){
-      inFrameStart = null;
-      capturing    = false;
-      if(autoTimer) clearTimeout(autoTimer);
-      updateFeedback('Align forehead & heels', 'red');
-    }
-
-    // capture to download
+    // capture image download
     function captureImage(){
-      updateFeedback('📸 Captured!', 'lime');
       const c = document.createElement('canvas');
       c.width  = W; c.height = H;
       c.getContext('2d').drawImage(video,0,0,W,H);
       c.toBlob(b=>{
-        const a=document.createElement('a');
-        a.href=URL.createObjectURL(b);
-        a.download=`aramandi_${Date.now()}.png`;
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(b);
+        a.download = `aramandi_${Date.now()}.png`;
         a.click();
       },'image/png');
     }
 
-    // manual capture
+    // manual capture button
     manualBtn.onclick = ()=>{
       if(manualTimer) return;
-      updateFeedback('Prepare…', 'orange');
-      let n=5;
-      const iv=setInterval(()=>{
-        updateFeedback(`Manual in ${n--}s`, 'orange');
-        if(n<0){
+      let count=5;
+      updateFeedback(`Capturing in ${count}…`,'orange');
+      const iv = setInterval(()=>{
+        count--;
+        if(count>0){
+          updateFeedback(`Capturing in ${count}…`,'orange');
+        } else {
           clearInterval(iv);
           captureImage();
-          manualTimer=null;
+          updateFeedback('📸 Captured!','lime');
+          manualTimer = null;
         }
       },1000);
       manualTimer = iv;
     };
 
+    // reset feedback
     resetBtn.onclick = ()=>{
-      resetAuto();
+      updateFeedback('Align forehead & heels','red');
+      feedbackState = 'out';
     };
 
-    // set up video→Pose
+    // camera init
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode:'user', width:W, height:H }, audio:false
@@ -186,61 +168,69 @@
       await video.play();
     } catch(e){
       console.error(e);
-      updateFeedback('❗ camera access required', 'crimson');
+      updateFeedback('❗ camera access required','crimson');
       return;
     }
 
-    // size our canvas
-    canvas.width = W; canvas.height = H;
-    document.querySelector('#camera-container').style.borderColor='red';
+    // size overlays
+    canvas.width  = W;
+    canvas.height = H;
     updateFeedback('Align forehead & heels','red');
+    document.querySelector('#camera-container').style.borderColor='red';
 
-    // load Pose
+    // load MediaPipe Pose
     const pose = new Pose({
       locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${f}`
     });
     pose.setOptions({
-      selfieMode: true,
-      modelComplexity: 1,
-      smoothLandmarks: true,
-      minDetectionConfidence: 0.5,
+      selfieMode:       true,
+      modelComplexity:  1,
+      smoothLandmarks:  true,
+      minDetectionConfidence:0.5,
       minTrackingConfidence: 0.5
     });
+
     pose.onResults(results=>{
       let lm = null;
       if(results.poseLandmarks){
-        const p=results.poseLandmarks;
-        // forehead from nose + eye inner midpoint
-        const eyeInnerX = (p[1].x + p[4].x)/2;
-        const eyeInnerY = (p[1].y + p[4].y)/2;
-        const noseY      = p[0].y;
-        const foreY      = eyeInnerY - (noseY-eyeInnerY);
+        const p = results.poseLandmarks;
+        // forehead: inner‑eyes → nose fallback
+        const ex = (p[1].x + p[4].x)/2;
+        const ey = (p[1].y + p[4].y)/2;
+        const ny = p[0].y;
+        const fy = ey - (ny-ey);
         // heel midpoint
-        const lh=p[27], rh=p[28];
+        const lh = p[27], rh = p[28];
         lm = {
-          forehead: { x: eyeInnerX, y: foreY },
-          heelMid:  { x: (lh.x+rh.x)/2, y: (lh.y+rh.y)/2 }
+          forehead:{ x: ex,        y: fy },
+          heelMid: { x: (lh.x+rh.x)/2, y: (lh.y+rh.y)/2 }
         };
       }
+
       drawOverlay(lm);
 
-      if(checkInFrame(lm)){
-        document.querySelector('#camera-container')
-                .style.borderColor='lime';
-        attemptAutoCapture();
+      if(isInFrame(lm)){
+        if(feedbackState!=='in'){
+          updateFeedback('IN FRAME – now tap “Manual”','lime');
+          feedbackState='in';
+          document.querySelector('#camera-container').style.borderColor='lime';
+        }
       } else {
-        document.querySelector('#camera-container')
-                .style.borderColor='red';
-        inFrameStart = null;
+        if(feedbackState!=='out'){
+          updateFeedback('Align forehead & heels','red');
+          feedbackState='out';
+          document.querySelector('#camera-container').style.borderColor='red';
+        }
       }
     });
 
-    // start feeding frames
+    // hook up the camera → pose
     const camera = new Camera(video, {
-      onFrame: async()=> await pose.send({ image: video }),
-      width: W, height: H
+      onFrame: async()=> await pose.send({ image:video }),
+      width:W, height:H
     });
     camera.start();
+
   })();
   </script>
 </body>
