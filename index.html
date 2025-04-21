@@ -39,7 +39,7 @@
   <h1>Smart Auto‑Crop Aramandi</h1>
   <p>
     Get full‑body in view — forehead clears the top slice and heels land on the orange bar → “IN FRAME!”  
-    Then tap “Capture (5 s)” to grab your standing, and again for your Aramandi pose.
+    Then tap “Capture (10 s)” to grab your standing, and again for your Aramandi pose.
   </p>
 
   <div id="camera-container">
@@ -49,7 +49,7 @@
 
   <div class="controls">
     <button id="resetBtn">🔄 Start Over</button>
-    <button id="manualBtn">📸 Capture (5 s)</button>
+    <button id="manualBtn">📸 Capture (10 s)</button>
   </div>
   <div id="feedback">Loading…</div>
 
@@ -161,18 +161,26 @@
 
     pose.onResults(results=>{
       let lm=null;
-      if(results.poseLandmarks){
-        const p=results.poseLandmarks;
-        const ex=(p[1].x+p[4].x)/2,
-              ey=(p[1].y+p[4].y)/2,
-              ny=p[0].y,
-              fy=ey-(ny-ey),
-              lh=p[27], rh=p[28];
-        lm={
-          forehead:{x:ex,y:fy},
-          heelMid: {x:(lh.x+rh.x)/2, y:(lh.y+rh.y)/2}
-        };
-      }
+      if (results.poseLandmarks
+    && results.poseLandmarks[0].visibility > 0.5    // nose/face is in view
+    && results.poseLandmarks[27].visibility > 0.5   // left heel visible
+    && results.poseLandmarks[28].visibility > 0.5)  // right heel visible
+{
+  const p = results.poseLandmarks;
+  // forehead via inner‑eyes → nose fallback
+  const ex = (p[1].x + p[4].x) / 2;
+  const ey = (p[1].y + p[4].y) / 2;
+  const ny = p[0].y;
+  const fy = ey - (ny - ey);
+  // heel midpoint
+  const lh = p[27], rh = p[28];
+  lm = {
+    forehead: { x: ex, y: fy },
+    heelMid:  { x: (lh.x + rh.x) / 2, y: (lh.y + rh.y) / 2 }
+  };
+} else {
+  lm = null;
+}
 
       drawOverlay(lm);
 
